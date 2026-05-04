@@ -58,7 +58,7 @@ impl Parse for FontMacroInput {
 }
 
 struct ParsedFont {
-    bitmap: Vec<u32>,
+    bitmap: Vec<u8>,
     metrics: Vec<GlyphMetricValue>,
     symbols: String,
     native_size: u32,
@@ -130,7 +130,7 @@ fn expand_font_macro(input: FontMacroInput) -> Result<TokenStream2> {
     });
 
     Ok(quote! {{
-        const BITMAP: &[u8] = &[#(#bitmap as u8),*];
+        const BITMAP: &[u8] = &[#(#bitmap),*];
         const SYMBOLS: &str = #symbols;
         const METRICS: &[#crate_path::GlyphMetrics] = &[#(#metrics),*];
 
@@ -166,7 +166,7 @@ fn parse_lvgl_font(source: &str) -> Result<ParsedFont> {
     let glyph_dsc_body = capture_section(source, r"glyph_dsc\[\]\s*=\s*\{(?s)(.*?)\};")?;
     let unicode_list_body = capture_section(source, r"unicode_list_0\[\]\s*=\s*\{(?s)(.*?)\};")?;
 
-    let bitmap = parse_u32_list(&strip_c_comments(&bitmap_body)?)?;
+    let bitmap = parse_u8_list(&strip_c_comments(&bitmap_body)?)?;
     let unicode_list = parse_u32_list(&strip_c_comments(&unicode_list_body)?)?;
     let range_start = capture_single_u32(source, r"\.range_start\s*=\s*(\d+)")?;
     let native_size = capture_single_u32(source, r"Size:\s*(\d+)\s*px")?;
@@ -258,6 +258,24 @@ fn capture_single_u32(source: &str, pattern: &str) -> Result<u32> {
     )
 }
 
+fn parse_u8_list(section: &str) -> Result<Vec<u8>> {
+    let number_re = Regex::new(r"0x[0-9A-Fa-f]+|\d+").map_err(regex_to_syn_error)?;
+    let mut values = Vec::new();
+
+    for matched in number_re.find_iter(section) {
+        values.push(parse_capture_u8(matched.as_str())?);
+    }
+
+    if values.is_empty() {
+        return Err(syn::Error::new(
+            Span::call_site(),
+            "expected at least one numeric value",
+        ));
+    }
+
+    Ok(values)
+}
+
 fn parse_u32_list(section: &str) -> Result<Vec<u32>> {
     let number_re = Regex::new(r"0x[0-9A-Fa-f]+|\d+").map_err(regex_to_syn_error)?;
     let mut values = Vec::new();
@@ -295,6 +313,17 @@ fn parse_capture_u32(value: &str) -> Result<u32> {
     }
 }
 
+fn parse_capture_u8(value: &str) -> Result<u8> {
+    let parsed = parse_capture_u32(value)?;
+
+    u8::try_from(parsed).map_err(|_| {
+        syn::Error::new(
+            Span::call_site(),
+            format!("bitmap value `{value}` is out of range for u8"),
+        )
+    })
+}
+
 fn regex_to_syn_error(error: regex::Error) -> syn::Error {
     syn::Error::new(Span::call_site(), format!("regex error: {error}"))
 }
@@ -314,8 +343,15 @@ mod tests {
         "#;
 
         let stripped = strip_c_comments(section).unwrap();
-        let values = parse_u32_list(&stripped).unwrap();
+        let values = parse_u8_list(&stripped).unwrap();
 
         assert_eq!(values, vec![0xfc, 0x80, 0xd2, 0x49, 0x20]);
+    }
+
+    #[test]
+    fn bitmap_values_must_fit_in_u8() {
+        let error = parse_u8_list("0x100").unwrap_err();
+
+        assert!(error.to_string().contains("out of range for u8"));
     }
 }
