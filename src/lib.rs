@@ -52,6 +52,9 @@ pub struct FontData<'a> {
     pub bitmap: &'a [u8],
     pub symbols: &'a str,
     pub metrics: &'a [GlyphMetrics],
+    pub half_width: u32,
+    pub full_width: u32,
+    pub height: u32,
     pub native_size: u32,
     pub line_height: u32,
     pub baseline: u32,
@@ -63,6 +66,9 @@ impl<'a> FontData<'a> {
         bitmap: &'a [u8],
         symbols: &'a str,
         metrics: &'a [GlyphMetrics],
+        half_width: u32,
+        full_width: u32,
+        height: u32,
         native_size: u32,
         line_height: u32,
         baseline: u32,
@@ -73,6 +79,9 @@ impl<'a> FontData<'a> {
             bitmap,
             symbols,
             metrics,
+            half_width,
+            full_width,
+            height,
             native_size,
             line_height,
             baseline,
@@ -91,25 +100,19 @@ impl<'a> FontData<'a> {
     }
 }
 
-/// A font plus caller-provided width and default height settings.
+/// A font plus optional bitmap scaling settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FontPreset<'a> {
-    pub font: FontData<'a>,
-    pub half_width: u32,
-    pub full_width: u32,
-    pub height: u32,
+    pub font: &'a FontData<'a>,
     pub scale_numerator: u32,
     pub scale_denominator: u32,
 }
 
 impl<'a> FontPreset<'a> {
-    /// Creates a preset from parsed font data and width defaults.
-    pub const fn new(font: FontData<'a>, half_width: u32, full_width: u32, height: u32) -> Self {
+    /// Creates a preset from parsed font data.
+    pub const fn new(font: &'a FontData<'a>) -> Self {
         Self {
             font,
-            half_width,
-            full_width,
-            height,
             scale_numerator: 1,
             scale_denominator: 1,
         }
@@ -117,22 +120,34 @@ impl<'a> FontPreset<'a> {
 
     /// Returns the underlying font data.
     pub const fn font_data(&self) -> &FontData<'a> {
-        &self.font
+        self.font
     }
 
     /// Returns the preset ASCII width.
     pub const fn ascii_width(&self) -> u32 {
-        self.half_width
+        scale_ratio_nonzero(
+            self.font.half_width,
+            self.safe_numerator(),
+            self.safe_denominator(),
+        )
     }
 
     /// Returns the preset non-ASCII width.
     pub const fn non_ascii_width(&self) -> u32 {
-        self.full_width
+        scale_ratio_nonzero(
+            self.font.full_width,
+            self.safe_numerator(),
+            self.safe_denominator(),
+        )
     }
 
     /// Returns the preset logical height.
     pub const fn height(&self) -> u32 {
-        self.height
+        scale_ratio_nonzero(
+            self.font.height,
+            self.safe_numerator(),
+            self.safe_denominator(),
+        )
     }
 
     /// Builds a text style using the preset widths and the provided logical size.
@@ -148,7 +163,7 @@ impl<'a> FontPreset<'a> {
     where
         C: PixelColor,
     {
-        self.text_style(text_color, self.height)
+        self.text_style(text_color, self.height())
     }
 
     /// Returns the effective scale numerator with zero mapped to one.
@@ -174,14 +189,14 @@ impl<'a> FontPreset<'a> {
         self.safe_numerator() != self.safe_denominator()
     }
 
-    /// Sets the bitmap scaling ratio without changing layout widths or height.
+    /// Sets the bitmap scaling ratio without changing the stored base font metrics.
     pub const fn with_scale_ratio(mut self, numerator: u32, denominator: u32) -> Self {
         self.scale_numerator = if numerator == 0 { 1 } else { numerator };
         self.scale_denominator = if denominator == 0 { 1 } else { denominator };
         self
     }
 
-    /// Sets the bitmap scaling target height without changing layout widths or height.
+    /// Sets the bitmap scaling target height without changing the stored base font metrics.
     pub const fn with_scaled_height(self, scaled_height: u32) -> Self {
         let target_height = if scaled_height == 0 {
             if self.font.native_size == 0 {
@@ -208,14 +223,10 @@ impl<'a> FontPreset<'a> {
         let numerator = if numerator == 0 { 1 } else { numerator };
         let denominator = if denominator == 0 { 1 } else { denominator };
 
-        Self {
-            font: self.font,
-            half_width: scale_ratio_nonzero(self.half_width, numerator, denominator),
-            full_width: scale_ratio_nonzero(self.full_width, numerator, denominator),
-            height: scale_ratio_nonzero(self.height, numerator, denominator),
-            scale_numerator: mul_scale_ratio(self.safe_numerator(), numerator),
-            scale_denominator: mul_scale_ratio(self.safe_denominator(), denominator),
-        }
+        self.with_scale_ratio(
+            mul_scale_ratio(self.safe_numerator(), numerator),
+            mul_scale_ratio(self.safe_denominator(), denominator),
+        )
     }
 
     /// Scales a glyph width for interpolated rendering.
@@ -321,14 +332,14 @@ where
             text_color,
             background_color: None,
             size: if size == 0 {
-                if preset.height == 0 {
+                if preset.height() == 0 {
                     if preset.font.native_size == 0 {
                         1
                     } else {
                         preset.font.native_size
                     }
                 } else {
-                    preset.height
+                    preset.height()
                 }
             } else {
                 size
@@ -349,14 +360,14 @@ where
             text_color,
             background_color: Some(background_color),
             size: if size == 0 {
-                if preset.height == 0 {
+                if preset.height() == 0 {
                     if preset.font.native_size == 0 {
                         1
                     } else {
                         preset.font.native_size
                     }
                 } else {
-                    preset.height
+                    preset.height()
                 }
             } else {
                 size
@@ -377,7 +388,7 @@ where
 
     /// Returns the effective font data used by this style.
     pub const fn font_data(&self) -> &FontData<'a> {
-        &self.preset.font
+        self.preset.font
     }
 
     /// Returns the effective scale ratio if this style was created from a scaled preset.
@@ -474,9 +485,9 @@ where
 
     fn character_width(&self, character: char) -> u32 {
         if character.is_ascii() {
-            self.preset.half_width
+            self.preset.ascii_width()
         } else {
-            self.preset.full_width
+            self.preset.non_ascii_width()
         }
     }
 
@@ -785,9 +796,18 @@ mod tests {
         GlyphMetrics::new(33, 320, 17, 18, 2, -1),
     ];
 
-    const HELLO_FONT: FontData<'static> =
-        FontData::new(HELLO_BITMAP, HELLO_SYMBOLS, HELLO_METRICS, 20, 18, 1);
-    const HELLO_PRESET: FontPreset<'static> = FontPreset::new(HELLO_FONT, 8, 16, 20);
+    const HELLO_FONT: FontData<'static> = FontData::new(
+        HELLO_BITMAP,
+        HELLO_SYMBOLS,
+        HELLO_METRICS,
+        8,
+        16,
+        20,
+        20,
+        18,
+        1,
+    );
+    const HELLO_PRESET: FontPreset<'static> = FontPreset::new(&HELLO_FONT);
     const HELLO_STYLE: EgTextStyle<'static, BinaryColor> =
         EgTextStyle::new(&HELLO_PRESET, BinaryColor::On, 20);
 
@@ -797,19 +817,28 @@ mod tests {
         GlyphMetrics::new(0, 3, 1, 1, 0, 0),
         GlyphMetrics::new(0, 5, 1, 1, 1, 0),
     ];
-    const SIMPLE_FONT: FontData<'static> =
-        FontData::new(SIMPLE_BITMAP, SIMPLE_SYMBOLS, SIMPLE_METRICS, 10, 10, 2);
-    const SIMPLE_PRESET: FontPreset<'static> = FontPreset::new(SIMPLE_FONT, 3, 5, 10);
+    const SIMPLE_FONT: FontData<'static> = FontData::new(
+        SIMPLE_BITMAP,
+        SIMPLE_SYMBOLS,
+        SIMPLE_METRICS,
+        3,
+        5,
+        10,
+        10,
+        10,
+        2,
+    );
+    const SIMPLE_PRESET: FontPreset<'static> = FontPreset::new(&SIMPLE_FONT);
 
     const UNIT_BITMAP: &[u8] = &[0b1000_0000];
     const UNIT_SYMBOLS: &str = "A";
     const UNIT_METRICS: &[GlyphMetrics] = &[GlyphMetrics::new(0, 1, 1, 1, 0, 0)];
     const UNIT_FONT: FontData<'static> =
-        FontData::new(UNIT_BITMAP, UNIT_SYMBOLS, UNIT_METRICS, 1, 1, 0);
-    const UNIT_PRESET: FontPreset<'static> = FontPreset::new(UNIT_FONT, 1, 1, 1);
+        FontData::new(UNIT_BITMAP, UNIT_SYMBOLS, UNIT_METRICS, 1, 1, 1, 1, 1, 0);
+    const UNIT_PRESET: FontPreset<'static> = FontPreset::new(&UNIT_FONT);
 
-    const BASELINE_FONT: FontData<'static> = FontData::new(&[], "", &[], 10, 10, 3);
-    const BASELINE_PRESET: FontPreset<'static> = FontPreset::new(BASELINE_FONT, 4, 8, 10);
+    const BASELINE_FONT: FontData<'static> = FontData::new(&[], "", &[], 4, 8, 10, 10, 10, 3);
+    const BASELINE_PRESET: FontPreset<'static> = FontPreset::new(&BASELINE_FONT);
 
     #[test]
     fn const_construction_works() {
@@ -817,14 +846,14 @@ mod tests {
             EgTextStyle::new(&HELLO_PRESET, BinaryColor::On, 20);
 
         assert_eq!(STYLE.preset.font.native_size, 20);
-        assert_eq!(STYLE.preset.half_width, 8);
-        assert_eq!(STYLE.preset.full_width, 16);
+        assert_eq!(STYLE.preset.font.half_width, 8);
+        assert_eq!(STYLE.preset.font.full_width, 16);
     }
 
     #[test]
     #[should_panic]
     fn font_data_requires_matching_lengths() {
-        let _ = FontData::new(&[], "AB", &HELLO_METRICS[..1], 20, 18, 1);
+        let _ = FontData::new(&[], "AB", &HELLO_METRICS[..1], 8, 16, 20, 20, 18, 1);
     }
 
     #[test]
@@ -832,8 +861,8 @@ mod tests {
         let style = HELLO_PRESET.default_text_style(BinaryColor::On);
 
         assert_eq!(style.size, 20);
-        assert_eq!(style.preset.half_width, 8);
-        assert_eq!(style.preset.full_width, 16);
+        assert_eq!(style.preset.font.half_width, 8);
+        assert_eq!(style.preset.font.full_width, 16);
         assert_eq!(style.preset.font.symbols, HELLO_FONT.symbols);
         assert_eq!(style.scale_ratio(), None);
     }
@@ -846,8 +875,8 @@ mod tests {
         assert_eq!(scaled.ascii_width(), 4);
         assert_eq!(scaled.non_ascii_width(), 8);
         assert_eq!(scaled.height(), 10);
-        assert_eq!(style.preset.half_width, 4);
-        assert_eq!(style.preset.full_width, 8);
+        assert_eq!(style.preset.ascii_width(), 4);
+        assert_eq!(style.preset.non_ascii_width(), 8);
         assert_eq!(style.size, 10);
     }
 
@@ -868,8 +897,8 @@ mod tests {
         assert_eq!(scaled.ascii_width(), 12);
         assert_eq!(scaled.non_ascii_width(), 24);
         assert_eq!(scaled.height(), 30);
-        assert_eq!(style.preset.half_width, 12);
-        assert_eq!(style.preset.full_width, 24);
+        assert_eq!(style.preset.ascii_width(), 12);
+        assert_eq!(style.preset.non_ascii_width(), 24);
         assert_eq!(style.size, 30);
         assert_eq!(style.scale_ratio(), Some((3, 2)));
     }
@@ -888,8 +917,8 @@ mod tests {
         let style = EgTextStyle::from_preset(&HELLO_PRESET, BinaryColor::On, 18);
 
         assert_eq!(style.size, 18);
-        assert_eq!(style.preset.half_width, 8);
-        assert_eq!(style.preset.full_width, 16);
+        assert_eq!(style.preset.font.half_width, 8);
+        assert_eq!(style.preset.font.full_width, 16);
         assert_eq!(style.preset.font.symbols, HELLO_FONT.symbols);
         assert_eq!(style.scale_ratio(), None);
     }
@@ -900,8 +929,8 @@ mod tests {
         let style = EgTextStyle::from_preset(&scaled, BinaryColor::On, 0);
 
         assert_eq!(style.size, 30);
-        assert_eq!(style.preset.half_width, 12);
-        assert_eq!(style.preset.full_width, 24);
+        assert_eq!(style.preset.ascii_width(), 12);
+        assert_eq!(style.preset.non_ascii_width(), 24);
         assert_eq!(style.preset.font.symbols, HELLO_FONT.symbols);
         assert_eq!(style.scale_ratio(), Some((3, 2)));
     }
@@ -942,7 +971,8 @@ mod tests {
 
     #[test]
     fn size_changes_vertical_metrics_only() {
-        const WIDE_PRESET: FontPreset<'static> = FontPreset::new(BASELINE_FONT, 6, 12, 10);
+        const WIDE_FONT: FontData<'static> = FontData::new(&[], "", &[], 6, 12, 10, 10, 10, 3);
+        const WIDE_PRESET: FontPreset<'static> = FontPreset::new(&WIDE_FONT);
         let small = EgTextStyle::new(&WIDE_PRESET, BinaryColor::On, 10);
         let large = EgTextStyle::new(&WIDE_PRESET, BinaryColor::On, 30);
 

@@ -5,18 +5,24 @@ use quote::quote;
 use regex::Regex;
 use std::{fs, path::PathBuf};
 use syn::{
-    Ident, LitStr, Result, Token,
+    Ident, LitInt, LitStr, Result, Token,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };
 
 struct FontMacroInput {
     path: LitStr,
+    half_width: LitInt,
+    full_width: LitInt,
+    height: LitInt,
 }
 
 impl Parse for FontMacroInput {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let mut path = None;
+        let mut half_width = None;
+        let mut full_width = None;
+        let mut height = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -24,10 +30,13 @@ impl Parse for FontMacroInput {
 
             match key.to_string().as_str() {
                 "path" => path = Some(input.parse()?),
+                "half_width" => half_width = Some(input.parse()?),
+                "full_width" => full_width = Some(input.parse()?),
+                "height" => height = Some(input.parse()?),
                 _ => {
                     return Err(syn::Error::new(
                         key.span(),
-                        "expected only: path",
+                        "expected one of: path, half_width, full_width, height",
                     ));
                 }
             }
@@ -39,6 +48,11 @@ impl Parse for FontMacroInput {
 
         Ok(Self {
             path: path.ok_or_else(|| syn::Error::new(Span::call_site(), "missing `path`"))?,
+            half_width: half_width
+                .ok_or_else(|| syn::Error::new(Span::call_site(), "missing `half_width`"))?,
+            full_width: full_width
+                .ok_or_else(|| syn::Error::new(Span::call_site(), "missing `full_width`"))?,
+            height: height.ok_or_else(|| syn::Error::new(Span::call_site(), "missing `height`"))?,
         })
     }
 }
@@ -88,6 +102,9 @@ fn expand_font_macro(input: FontMacroInput) -> Result<TokenStream2> {
 
     let bitmap = parsed.bitmap.iter();
     let symbols = LitStr::new(&parsed.symbols, Span::call_site());
+    let half_width = &input.half_width;
+    let full_width = &input.full_width;
+    let height = &input.height;
     let native_size = parsed.native_size;
     let line_height = parsed.line_height;
     let baseline = parsed.baseline;
@@ -121,6 +138,9 @@ fn expand_font_macro(input: FontMacroInput) -> Result<TokenStream2> {
             BITMAP,
             SYMBOLS,
             METRICS,
+            #half_width,
+            #full_width,
+            #height,
             #native_size,
             #line_height,
             #baseline,

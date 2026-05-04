@@ -10,6 +10,7 @@ It keeps the original 1bpp glyph bitmap data, but replaces LVGL's numeric charac
   - raw bitmap bytes
   - UTF-8 symbol string
   - glyph metrics
+  - default ASCII width, non-ASCII width, and logical height
   - native size, line height, and baseline
 - `EgTextStyle` implements:
   - `embedded_graphics::text::renderer::TextRenderer`
@@ -37,7 +38,7 @@ const METRICS: &[GlyphMetrics] = &[
     GlyphMetrics::new(33, 320, 17, 18, 2, -1),
 ];
 
-const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 20, 18, 1);
+const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 8, 16, 20, 20, 18, 1);
 ```
 
 ## Rendering
@@ -59,8 +60,8 @@ use lvgl_font_bridge::{EgTextStyle, FontPreset};
 #     GlyphMetrics::new(0, 3, 1, 1, 0, 0),
 #     GlyphMetrics::new(0, 5, 1, 1, 1, 0),
 # ];
-# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 10, 10, 2);
-# const PRESET: FontPreset<'static> = FontPreset::new(FONT, 8, 16, 20);
+# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 8, 16, 20, 10, 10, 2);
+# const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
 let style = EgTextStyle::new(&PRESET, BinaryColor::On, 20);
 ```
 
@@ -80,8 +81,8 @@ use lvgl_font_bridge::{FontData, FontPreset, GlyphMetrics};
 #     GlyphMetrics::new(0, 3, 1, 1, 0, 0),
 #     GlyphMetrics::new(0, 5, 1, 1, 1, 0),
 # ];
-# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 10, 10, 2);
-const PRESET: FontPreset<'static> = FontPreset::new(FONT, 8, 16, 20);
+# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 8, 16, 20, 10, 10, 2);
+const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
 
 let scaled = PRESET.scaled_ratio(1, 2);
 let style = scaled.default_text_style(BinaryColor::On);
@@ -106,8 +107,8 @@ When a style is created from `scaled_ratio(...)`, glyph rendering also uses inte
 #     GlyphMetrics::new(0, 3, 1, 1, 0, 0),
 #     GlyphMetrics::new(0, 5, 1, 1, 1, 0),
 # ];
-# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 10, 10, 2);
-# const PRESET: FontPreset<'static> = FontPreset::new(FONT, 8, 16, 20);
+# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 8, 16, 20, 10, 10, 2);
+# const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
 let fixed = EgTextStyle::from_preset(&PRESET, BinaryColor::On, 20);
 let scaled = PRESET.scaled_ratio(3, 2);
 let proportional = EgTextStyle::from_preset(&scaled, BinaryColor::On, 0);
@@ -126,8 +127,8 @@ For non-integer ratios:
 #     GlyphMetrics::new(0, 3, 1, 1, 0, 0),
 #     GlyphMetrics::new(0, 5, 1, 1, 1, 0),
 # ];
-# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 10, 10, 2);
-const PRESET: FontPreset<'static> = FontPreset::new(FONT, 8, 16, 20);
+# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 8, 16, 20, 10, 10, 2);
+const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
 
 let scaled = PRESET.scaled_ratio(3, 2);
 ```
@@ -141,17 +142,25 @@ Use `lvgl_font!` to read an LVGL-generated `.c` file at compile time and expand 
 ```rust
 use lvgl_font_bridge::{FontData, FontPreset, lvgl_font};
 
-const FONT: FontData<'static> = lvgl_font!(path = "hello.c");
-const PRESET: FontPreset<'static> = FontPreset::new(FONT, 6, 12, 12).with_scaled_height(16);
+const FONT: FontData<'static> = lvgl_font!(
+    path = "hello.c",
+    half_width = 6,
+    full_width = 12,
+    height = 12,
+);
+const PRESET: FontPreset<'static> = FontPreset::new(&FONT).with_scaled_height(16);
 ```
 
 The macro returns `FontData`, which contains:
 
 - parsed `FontData`
+- `half_width`
+- `full_width`
+- `height`
 
 Convert it to `FontPreset` with `const` functions:
 
-- `FontPreset::new(font, half_width, full_width, height)`
+- `FontPreset::new(&font)`
 - `.with_scaled_height(height)`
 - `.scaled_ratio(numerator, denominator)`
 
@@ -161,8 +170,13 @@ Create a text style from the preset:
 use embedded_graphics::pixelcolor::BinaryColor;
 
 # use lvgl_font_bridge::{FontData, FontPreset, lvgl_font};
-# const FONT: FontData<'static> = lvgl_font!(path = "hello.c");
-# const PRESET: FontPreset<'static> = FontPreset::new(FONT, 6, 12, 12).with_scaled_height(16);
+# const FONT: FontData<'static> = lvgl_font!(
+#     path = "hello.c",
+#     half_width = 6,
+#     full_width = 12,
+#     height = 12,
+# );
+# const PRESET: FontPreset<'static> = FontPreset::new(&FONT).with_scaled_height(16);
 let style = PRESET.default_text_style(BinaryColor::On);
 let bigger = PRESET.text_style(BinaryColor::On, 18);
 ```
