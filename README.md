@@ -1,0 +1,88 @@
+# lvgl-font-bridge
+
+`lvgl-font-bridge` is a small `no_std` helper crate for rendering LVGL-generated bitmap fonts with `embedded-graphics`.
+
+It keeps the original 1bpp glyph bitmap data, but replaces LVGL's numeric character mapping with direct UTF-8 symbols stored in a single `&str`.
+
+## Features
+
+- `FontData` stores:
+  - raw bitmap bytes
+  - UTF-8 symbol string
+  - glyph metrics
+  - native size, line height, and baseline
+- `EgTextStyle` implements:
+  - `embedded_graphics::text::renderer::TextRenderer`
+  - `embedded_graphics::text::renderer::CharacterStyle`
+- Horizontal advance is controlled by the user:
+  - one width for ASCII characters
+  - one width for non-ASCII characters
+- Vertical layout scales with `size`
+- Bitmap glyphs are not scaled at runtime
+- `FontData::new` contains a const assertion that checks:
+  - `symbols.chars().count() == metrics.len()`
+
+## Data Model
+
+`symbols` is a single UTF-8 string. Each character in that string corresponds to one entry in `metrics` at the same index.
+
+For example:
+
+```rust
+use lvgl_font_bridge::{FontData, GlyphMetrics};
+
+const BITMAP: &[u8] = &[0x00, 0x00];
+const SYMBOLS: &str = "1H哈";
+const METRICS: &[GlyphMetrics] = &[
+    GlyphMetrics::new(0, 167, 7, 15, 2, 0),
+    GlyphMetrics::new(14, 223, 10, 15, 2, 0),
+    GlyphMetrics::new(33, 320, 17, 18, 2, -1),
+];
+
+const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 20, 18, 1);
+```
+
+## Rendering
+
+Create an `EgTextStyle` with:
+
+- the font
+- a text color
+- a logical `size`
+- an ASCII width
+- a non-ASCII width
+
+```rust
+use embedded_graphics::pixelcolor::BinaryColor;
+use lvgl_font_bridge::EgTextStyle;
+
+# use lvgl_font_bridge::{FontData, GlyphMetrics};
+# const BITMAP: &[u8] = &[0x00];
+# const SYMBOLS: &str = "A哈";
+# const METRICS: &[GlyphMetrics] = &[
+#     GlyphMetrics::new(0, 3, 1, 1, 0, 0),
+#     GlyphMetrics::new(0, 5, 1, 1, 1, 0),
+# ];
+# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 10, 10, 2);
+let style = EgTextStyle::new(&FONT, BinaryColor::On, 20, 8, 16);
+```
+
+Then use it with `embedded-graphics::text::Text`.
+
+## Behavior Notes
+
+- Glyph lookup is done by iterating `symbols.chars()`
+- Missing glyphs are not drawn
+- Missing glyphs still advance:
+  - ASCII characters use `ascii_width`
+  - all other characters use `non_ascii_width`
+- `size == 0` falls back to the font's `native_size`
+- `adv_w` is preserved from LVGL data, but current horizontal layout uses the user-specified widths instead
+
+## Limitations
+
+- 1bpp bitmap fonts only
+- no runtime bitmap scaling
+- no kerning
+- no ligatures
+- no fallback font chain

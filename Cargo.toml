@@ -1,0 +1,7 @@
+[package]
+name = "lvgl-font-bridge"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+embedded-graphics = { version = "0.8.2", default-features = false }
