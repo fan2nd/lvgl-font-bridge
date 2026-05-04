@@ -243,6 +243,13 @@ where
         }
     }
 
+    fn glyph_x_offset(&self, character: char, glyph: &GlyphMetrics) -> i32 {
+        let cell_width = self.character_width(character) as i32;
+        let glyph_width = glyph.box_w as i32;
+
+        (cell_width - glyph_width) / 2
+    }
+
     fn draw_background<D>(&self, width: u32, origin: Point, target: &mut D) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = C>,
@@ -261,12 +268,16 @@ where
         Ok(())
     }
 
-    fn glyph_origin(&self, cell_origin: Point, glyph: &GlyphMetrics) -> Point {
+    fn glyph_origin(&self, character: char, cell_origin: Point, glyph: &GlyphMetrics) -> Point {
         let y = self
             .scaled_alphabetic_baseline_offset()
             .saturating_sub(glyph.box_h);
 
-        cell_origin + Point::new(glyph.ofs_x, u32_to_i32_sat(y).saturating_sub(glyph.ofs_y))
+        cell_origin
+            + Point::new(
+                self.glyph_x_offset(character, glyph),
+                u32_to_i32_sat(y).saturating_sub(glyph.ofs_y),
+            )
     }
 
     fn glyph_bit(&self, glyph: &GlyphMetrics, x: u32, y: u32) -> bool {
@@ -288,6 +299,7 @@ where
 
     fn draw_glyph<D>(
         &self,
+        character: char,
         glyph: &GlyphMetrics,
         cell_origin: Point,
         target: &mut D,
@@ -299,7 +311,7 @@ where
             return Ok(());
         };
 
-        let origin = self.glyph_origin(cell_origin, glyph);
+        let origin = self.glyph_origin(character, cell_origin, glyph);
 
         for y in 0..glyph.box_h {
             for x in 0..glyph.box_w {
@@ -342,7 +354,7 @@ where
             self.draw_background(width, cell_origin, target)?;
 
             if let Some(glyph) = self.font.glyph_for_char(character) {
-                self.draw_glyph(glyph, cell_origin, target)?;
+                self.draw_glyph(character, glyph, cell_origin, target)?;
             }
 
             cursor_x = cursor_x.saturating_add(width);
@@ -572,8 +584,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(next, Point::new(8, 0));
-        assert_eq!(display.get_pixel(Point::new(0, 7)), Some(BinaryColor::On));
-        assert_eq!(display.get_pixel(Point::new(4, 7)), Some(BinaryColor::On));
+        assert_eq!(display.get_pixel(Point::new(1, 7)), Some(BinaryColor::On));
+        assert_eq!(display.get_pixel(Point::new(5, 7)), Some(BinaryColor::On));
     }
 
     #[test]
@@ -586,8 +598,8 @@ mod tests {
             .draw(&mut display)
             .unwrap();
 
-        assert_eq!(display.get_pixel(Point::new(1, 9)), Some(BinaryColor::On));
-        assert_eq!(display.get_pixel(Point::new(5, 9)), Some(BinaryColor::On));
+        assert_eq!(display.get_pixel(Point::new(2, 9)), Some(BinaryColor::On));
+        assert_eq!(display.get_pixel(Point::new(6, 9)), Some(BinaryColor::On));
     }
 
     #[test]
