@@ -136,49 +136,35 @@ This scales the preset by `1.5x`.
 
 ## Compile-Time Macro
 
-The compile-time macro is behind the `macros` feature.
-
-```toml
-lvgl-font-bridge = { version = "...", features = ["macros"] }
-```
-
-Use `lvgl_font!` to read an LVGL-generated `.c` file at compile time and expand it into Rust font data plus caller-provided full-width and half-width defaults.
+Use `lvgl_font!` to read an LVGL-generated `.c` file at compile time and expand it into Rust `FontData`.
 
 ```rust
-use lvgl_font_bridge::{FontPreset, lvgl_font};
+use lvgl_font_bridge::{FontData, FontPreset, lvgl_font};
 
-const FONT: FontPreset<'static> = lvgl_font!(
-    path = "hello.c",
-    half_width = 6,
-    full_width = 12,
-    height = 12,
-    scaled_height = 16,
-);
+const FONT: FontData<'static> = lvgl_font!(path = "hello.c");
+const PRESET: FontPreset<'static> = FontPreset::new(FONT, 6, 12, 12).with_scaled_height(16);
 ```
 
-The macro returns a `FontPreset`, which contains:
+The macro returns `FontData`, which contains:
 
 - parsed `FontData`
-- `half_width`
-- `full_width`
-- `height`
-- optional interpolated glyph render height via `scaled_height`
+
+Convert it to `FontPreset` with `const` functions:
+
+- `FontPreset::new(font, half_width, full_width, height)`
+- `.with_scaled_height(height)`
+- `.scaled_ratio(numerator, denominator)`
 
 Create a text style from the preset:
 
 ```rust
 use embedded_graphics::pixelcolor::BinaryColor;
 
-# use lvgl_font_bridge::{FontPreset, lvgl_font};
-# const FONT: FontPreset<'static> = lvgl_font!(
-#     path = "hello.c",
-#     half_width = 6,
-#     full_width = 12,
-#     height = 12,
-#     scaled_height = 16,
-# );
-let style = FONT.default_text_style(BinaryColor::On);
-let bigger = FONT.text_style(BinaryColor::On, 18);
+# use lvgl_font_bridge::{FontData, FontPreset, lvgl_font};
+# const FONT: FontData<'static> = lvgl_font!(path = "hello.c");
+# const PRESET: FontPreset<'static> = FontPreset::new(FONT, 6, 12, 12).with_scaled_height(16);
+let style = PRESET.default_text_style(BinaryColor::On);
+let bigger = PRESET.text_style(BinaryColor::On, 18);
 ```
 
 ## Behavior Notes
@@ -190,7 +176,7 @@ let bigger = FONT.text_style(BinaryColor::On, 18);
   - all other characters use `non_ascii_width`
 - `size == 0` falls back to the font's `native_size`
 - `adv_w` is preserved from LVGL data, but current horizontal layout uses the user-specified widths instead
-- `scaled_height` only changes bitmap interpolation ratio; it does not auto-resize `half_width`, `full_width`, or `height`
+- `with_scaled_height(...)` only changes bitmap interpolation ratio; it does not auto-resize `half_width`, `full_width`, or `height`
 
 ## Limitations
 

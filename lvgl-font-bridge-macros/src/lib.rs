@@ -5,26 +5,18 @@ use quote::quote;
 use regex::Regex;
 use std::{fs, path::PathBuf};
 use syn::{
-    Ident, LitInt, LitStr, Result, Token,
+    Ident, LitStr, Result, Token,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };
 
 struct FontMacroInput {
     path: LitStr,
-    half_width: LitInt,
-    full_width: LitInt,
-    height: LitInt,
-    scaled_height: Option<LitInt>,
 }
 
 impl Parse for FontMacroInput {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let mut path = None;
-        let mut half_width = None;
-        let mut full_width = None;
-        let mut height = None;
-        let mut scaled_height = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -32,14 +24,10 @@ impl Parse for FontMacroInput {
 
             match key.to_string().as_str() {
                 "path" => path = Some(input.parse()?),
-                "half_width" => half_width = Some(input.parse()?),
-                "full_width" => full_width = Some(input.parse()?),
-                "height" => height = Some(input.parse()?),
-                "scaled_height" => scaled_height = Some(input.parse()?),
                 _ => {
                     return Err(syn::Error::new(
                         key.span(),
-                        "expected one of: path, half_width, full_width, height, scaled_height",
+                        "expected only: path",
                     ));
                 }
             }
@@ -51,12 +39,6 @@ impl Parse for FontMacroInput {
 
         Ok(Self {
             path: path.ok_or_else(|| syn::Error::new(Span::call_site(), "missing `path`"))?,
-            half_width: half_width
-                .ok_or_else(|| syn::Error::new(Span::call_site(), "missing `half_width`"))?,
-            full_width: full_width
-                .ok_or_else(|| syn::Error::new(Span::call_site(), "missing `full_width`"))?,
-            height: height.ok_or_else(|| syn::Error::new(Span::call_site(), "missing `height`"))?,
-            scaled_height,
         })
     }
 }
@@ -109,10 +91,6 @@ fn expand_font_macro(input: FontMacroInput) -> Result<TokenStream2> {
     let native_size = parsed.native_size;
     let line_height = parsed.line_height;
     let baseline = parsed.baseline;
-    let half_width = &input.half_width;
-    let full_width = &input.full_width;
-    let height = &input.height;
-    let scaled_height = input.scaled_height.as_ref();
 
     let metrics = parsed.metrics.iter().map(|metric| {
         let bitmap_index = metric.bitmap_index;
@@ -134,47 +112,19 @@ fn expand_font_macro(input: FontMacroInput) -> Result<TokenStream2> {
         }
     });
 
-    let preset_expr = if let Some(scaled_height) = scaled_height {
-        quote! {
-            #crate_path::FontPreset::new(
-                #crate_path::FontData::new(
-                    BITMAP,
-                    SYMBOLS,
-                    METRICS,
-                    #native_size,
-                    #line_height,
-                    #baseline,
-                ),
-                #half_width,
-                #full_width,
-                #height,
-            )
-            .with_scaled_height(#scaled_height)
-        }
-    } else {
-        quote! {
-            #crate_path::FontPreset::new(
-                #crate_path::FontData::new(
-                    BITMAP,
-                    SYMBOLS,
-                    METRICS,
-                    #native_size,
-                    #line_height,
-                    #baseline,
-                ),
-                #half_width,
-                #full_width,
-                #height,
-            )
-        }
-    };
-
     Ok(quote! {{
         const BITMAP: &[u8] = &[#(#bitmap as u8),*];
         const SYMBOLS: &str = #symbols;
         const METRICS: &[#crate_path::GlyphMetrics] = &[#(#metrics),*];
 
-        #preset_expr
+        #crate_path::FontData::new(
+            BITMAP,
+            SYMBOLS,
+            METRICS,
+            #native_size,
+            #line_height,
+            #baseline,
+        )
     }})
 }
 

@@ -1,6 +1,5 @@
 #![no_std]
 
-#[cfg(feature = "macros")]
 pub use lvgl_font_bridge_macros::lvgl_font;
 
 use embedded_graphics::{
