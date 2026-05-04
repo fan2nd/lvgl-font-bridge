@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "macros")]
+pub use lvgl_font_bridge_macros::lvgl_font;
+
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::{Point, Size},
@@ -86,6 +89,54 @@ impl<'a> FontData<'a> {
         }
 
         None
+    }
+}
+
+/// A font plus caller-provided width and default height settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FontPreset<'a> {
+    pub font: FontData<'a>,
+    pub half_width: u32,
+    pub full_width: u32,
+    pub height: u32,
+}
+
+impl<'a> FontPreset<'a> {
+    /// Creates a preset from parsed font data and width defaults.
+    pub const fn new(font: FontData<'a>, half_width: u32, full_width: u32, height: u32) -> Self {
+        Self {
+            font,
+            half_width,
+            full_width,
+            height,
+        }
+    }
+
+    /// Returns the underlying font data.
+    pub const fn font_data(&self) -> &FontData<'a> {
+        &self.font
+    }
+
+    /// Builds a text style using the preset widths and the provided logical size.
+    pub const fn text_style<C>(&'a self, text_color: C, size: u32) -> EgTextStyle<'a, C>
+    where
+        C: PixelColor,
+    {
+        EgTextStyle::new(
+            &self.font,
+            text_color,
+            if size == 0 { self.height } else { size },
+            self.half_width,
+            self.full_width,
+        )
+    }
+
+    /// Builds a text style using the preset height as the default size.
+    pub const fn default_text_style<C>(&'a self, text_color: C) -> EgTextStyle<'a, C>
+    where
+        C: PixelColor,
+    {
+        self.text_style(text_color, self.height)
     }
 }
 
@@ -434,6 +485,17 @@ mod tests {
     #[should_panic]
     fn font_data_requires_matching_lengths() {
         let _ = FontData::new(&[], "AB", &HELLO_METRICS[..1], 20, 18, 1);
+    }
+
+    #[test]
+    fn font_preset_uses_default_dimensions() {
+        const PRESET: FontPreset<'static> = FontPreset::new(HELLO_FONT, 8, 16, 20);
+        let style = PRESET.default_text_style(BinaryColor::On);
+
+        assert_eq!(style.size, 20);
+        assert_eq!(style.ascii_width, 8);
+        assert_eq!(style.non_ascii_width, 16);
+        assert_eq!(style.font.symbols, HELLO_FONT.symbols);
     }
 
     #[test]

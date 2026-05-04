@@ -26,8 +26,6 @@ It keeps the original 1bpp glyph bitmap data, but replaces LVGL's numeric charac
 
 `symbols` is a single UTF-8 string. Each character in that string corresponds to one entry in `metrics` at the same index.
 
-For example:
-
 ```rust
 use lvgl_font_bridge::{FontData, GlyphMetrics};
 
@@ -69,6 +67,50 @@ let style = EgTextStyle::new(&FONT, BinaryColor::On, 20, 8, 16);
 
 Then use it with `embedded-graphics::text::Text`.
 
+## Compile-Time Macro
+
+The compile-time macro is behind the `macros` feature.
+
+```toml
+lvgl-font-bridge = { version = "...", features = ["macros"] }
+```
+
+Use `lvgl_font!` to read an LVGL-generated `.c` file at compile time and expand it into Rust font data plus caller-provided full-width and half-width defaults.
+
+```rust
+use lvgl_font_bridge::{FontPreset, lvgl_font};
+
+const FONT: FontPreset<'static> = lvgl_font!(
+    path = "hello.c",
+    half_width = 6,
+    full_width = 12,
+    height = 12,
+);
+```
+
+The macro returns a `FontPreset`, which contains:
+
+- parsed `FontData`
+- `half_width`
+- `full_width`
+- `height`
+
+Create a text style from the preset:
+
+```rust
+use embedded_graphics::pixelcolor::BinaryColor;
+
+# use lvgl_font_bridge::{FontPreset, lvgl_font};
+# const FONT: FontPreset<'static> = lvgl_font!(
+#     path = "hello.c",
+#     half_width = 6,
+#     full_width = 12,
+#     height = 12,
+# );
+let style = FONT.default_text_style(BinaryColor::On);
+let bigger = FONT.text_style(BinaryColor::On, 18);
+```
+
 ## Behavior Notes
 
 - Glyph lookup is done by iterating `symbols.chars()`
@@ -86,3 +128,4 @@ Then use it with `embedded-graphics::text::Text`.
 - no kerning
 - no ligatures
 - no fallback font chain
+- the compile-time macro currently expects the common LVGL sparse font layout used by files like `hello.c`
