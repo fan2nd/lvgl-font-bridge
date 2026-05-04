@@ -99,6 +99,8 @@ pub struct FontPreset<'a> {
     pub half_width: u32,
     pub full_width: u32,
     pub height: u32,
+    pub scale_numerator: u32,
+    pub scale_denominator: u32,
 }
 
 impl<'a> FontPreset<'a> {
@@ -109,6 +111,8 @@ impl<'a> FontPreset<'a> {
             half_width,
             full_width,
             height,
+            scale_numerator: 1,
+            scale_denominator: 1,
         }
     }
 
@@ -117,18 +121,27 @@ impl<'a> FontPreset<'a> {
         &self.font
     }
 
+    /// Returns the preset ASCII width.
+    pub const fn ascii_width(&self) -> u32 {
+        self.half_width
+    }
+
+    /// Returns the preset non-ASCII width.
+    pub const fn non_ascii_width(&self) -> u32 {
+        self.full_width
+    }
+
+    /// Returns the preset logical height.
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
     /// Builds a text style using the preset widths and the provided logical size.
     pub const fn text_style<C>(&'a self, text_color: C, size: u32) -> EgTextStyle<'a, C>
     where
         C: PixelColor,
     {
-        EgTextStyle::new(
-            &self.font,
-            text_color,
-            if size == 0 { self.height } else { size },
-            self.half_width,
-            self.full_width,
-        )
+        EgTextStyle::from_preset(self, text_color, size)
     }
 
     /// Builds a text style using the preset height as the default size.
@@ -138,84 +151,309 @@ impl<'a> FontPreset<'a> {
     {
         self.text_style(text_color, self.height)
     }
+
+    /// Returns the effective scale numerator with zero mapped to one.
+    pub const fn safe_numerator(&self) -> u32 {
+        if self.scale_numerator == 0 {
+            1
+        } else {
+            self.scale_numerator
+        }
+    }
+
+    /// Returns the effective scale denominator with zero mapped to one.
+    pub const fn safe_denominator(&self) -> u32 {
+        if self.scale_denominator == 0 {
+            1
+        } else {
+            self.scale_denominator
+        }
+    }
+
+    /// Returns whether this preset renders glyphs with proportional bitmap scaling.
+    pub const fn is_scaled(&self) -> bool {
+        self.safe_numerator() != self.safe_denominator()
+    }
+
+    /// Sets the bitmap scaling ratio without changing layout widths or height.
+    pub const fn with_scale_ratio(mut self, numerator: u32, denominator: u32) -> Self {
+        self.scale_numerator = if numerator == 0 { 1 } else { numerator };
+        self.scale_denominator = if denominator == 0 { 1 } else { denominator };
+        self
+    }
+
+    /// Sets the bitmap scaling target height without changing layout widths or height.
+    pub const fn with_scaled_height(self, scaled_height: u32) -> Self {
+        let target_height = if scaled_height == 0 {
+            if self.font.native_size == 0 {
+                1
+            } else {
+                self.font.native_size
+            }
+        } else {
+            scaled_height
+        };
+
+        self.with_scale_ratio(
+            target_height,
+            if self.font.native_size == 0 {
+                1
+            } else {
+                self.font.native_size
+            },
+        )
+    }
+
+    /// Returns a new preset with width, height, and bitmap rendering scaled together.
+    pub const fn scaled_ratio(&self, numerator: u32, denominator: u32) -> Self {
+        let numerator = if numerator == 0 { 1 } else { numerator };
+        let denominator = if denominator == 0 { 1 } else { denominator };
+
+        Self {
+            font: self.font,
+            half_width: scale_ratio_nonzero(self.half_width, numerator, denominator),
+            full_width: scale_ratio_nonzero(self.full_width, numerator, denominator),
+            height: scale_ratio_nonzero(self.height, numerator, denominator),
+            scale_numerator: mul_scale_ratio(self.safe_numerator(), numerator),
+            scale_denominator: mul_scale_ratio(self.safe_denominator(), denominator),
+        }
+    }
+
+    /// Scales a glyph width for interpolated rendering.
+    pub const fn scaled_box_w_for_ratio(
+        glyph: &GlyphMetrics,
+        numerator: u32,
+        denominator: u32,
+    ) -> u32 {
+        scale_ratio_nonzero(glyph.box_w, numerator, denominator)
+    }
+
+    /// Scales a glyph height for interpolated rendering.
+    pub const fn scaled_box_h_for_ratio(
+        glyph: &GlyphMetrics,
+        numerator: u32,
+        denominator: u32,
+    ) -> u32 {
+        scale_ratio_nonzero(glyph.box_h, numerator, denominator)
+    }
+
+    /// Scales a vertical glyph offset for interpolated rendering.
+    pub const fn scaled_ofs_y_for_ratio(
+        glyph: &GlyphMetrics,
+        numerator: u32,
+        denominator: u32,
+    ) -> i32 {
+        scale_i32_ratio(glyph.ofs_y, numerator, denominator)
+    }
+
+    /// Samples a scaled glyph pixel using bilinear interpolation over the source bitmap.
+    pub fn interpolated_glyph_bit_for_ratio(
+        font: &FontData<'_>,
+        glyph: &GlyphMetrics,
+        numerator: u32,
+        denominator: u32,
+        x: u32,
+        y: u32,
+    ) -> bool {
+        let dst_w = Self::scaled_box_w_for_ratio(glyph, numerator, denominator);
+        let dst_h = Self::scaled_box_h_for_ratio(glyph, numerator, denominator);
+
+        if dst_w == 0 || dst_h == 0 || x >= dst_w || y >= dst_h {
+            return false;
+        }
+
+        let (src_x, frac_x) = scaled_source_coordinate(x, glyph.box_w, dst_w);
+        let (src_y, frac_y) = scaled_source_coordinate(y, glyph.box_h, dst_h);
+        let src_x1 = (src_x + 1).min(glyph.box_w.saturating_sub(1));
+        let src_y1 = (src_y + 1).min(glyph.box_h.saturating_sub(1));
+
+        let v00 = if glyph_bitmap_bit(font, glyph, src_x, src_y) {
+            255_u32
+        } else {
+            0
+        };
+        let v10 = if glyph_bitmap_bit(font, glyph, src_x1, src_y) {
+            255_u32
+        } else {
+            0
+        };
+        let v01 = if glyph_bitmap_bit(font, glyph, src_x, src_y1) {
+            255_u32
+        } else {
+            0
+        };
+        let v11 = if glyph_bitmap_bit(font, glyph, src_x1, src_y1) {
+            255_u32
+        } else {
+            0
+        };
+
+        let top = v00 * (256 - frac_x) + v10 * frac_x;
+        let bottom = v01 * (256 - frac_x) + v11 * frac_x;
+        let interpolated = (top * (256 - frac_y) + bottom * frac_y + 32_768) >> 16;
+
+        interpolated >= 128
+    }
 }
 
-/// `embedded-graphics` text style backed by [`FontData`].
+/// `embedded-graphics` text style backed by [`FontPreset`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EgTextStyle<'a, C> {
-    pub font: &'a FontData<'a>,
-    pub text_color: Option<C>,
+    pub preset: &'a FontPreset<'a>,
+    pub text_color: C,
     pub background_color: Option<C>,
     pub size: u32,
-    pub ascii_width: u32,
-    pub non_ascii_width: u32,
+    text_transparent: bool,
 }
 
 impl<'a, C> EgTextStyle<'a, C>
 where
     C: PixelColor,
 {
+    /// Creates a text style from a font preset.
+    pub const fn from_preset(preset: &'a FontPreset<'a>, text_color: C, size: u32) -> Self {
+        Self::new(preset, text_color, size)
+    }
+
     /// Creates a text style with a transparent background.
-    pub const fn new(
-        font: &'a FontData<'a>,
-        text_color: C,
-        size: u32,
-        ascii_width: u32,
-        non_ascii_width: u32,
-    ) -> Self {
+    pub const fn new(preset: &'a FontPreset<'a>, text_color: C, size: u32) -> Self {
         Self {
-            font,
-            text_color: Some(text_color),
+            preset,
+            text_color,
             background_color: None,
-            size,
-            ascii_width,
-            non_ascii_width,
+            size: if size == 0 {
+                if preset.height == 0 {
+                    if preset.font.native_size == 0 {
+                        1
+                    } else {
+                        preset.font.native_size
+                    }
+                } else {
+                    preset.height
+                }
+            } else {
+                size
+            },
+            text_transparent: false,
         }
     }
 
     /// Creates a text style with an explicit background color.
     pub const fn with_background(
-        font: &'a FontData<'a>,
+        preset: &'a FontPreset<'a>,
         text_color: C,
         background_color: C,
         size: u32,
-        ascii_width: u32,
-        non_ascii_width: u32,
     ) -> Self {
         Self {
-            font,
-            text_color: Some(text_color),
+            preset,
+            text_color,
             background_color: Some(background_color),
-            size,
-            ascii_width,
-            non_ascii_width,
+            size: if size == 0 {
+                if preset.height == 0 {
+                    if preset.font.native_size == 0 {
+                        1
+                    } else {
+                        preset.font.native_size
+                    }
+                } else {
+                    preset.height
+                }
+            } else {
+                size
+            },
+            text_transparent: false,
+        }
+    }
+
+    /// Creates a text style with background color from a font preset.
+    pub const fn with_background_from_preset(
+        preset: &'a FontPreset<'a>,
+        text_color: C,
+        background_color: C,
+        size: u32,
+    ) -> Self {
+        Self::with_background(preset, text_color, background_color, size)
+    }
+
+    /// Returns the effective font data used by this style.
+    pub const fn font_data(&self) -> &FontData<'a> {
+        &self.preset.font
+    }
+
+    /// Returns the effective scale ratio if this style was created from a scaled preset.
+    pub const fn scale_ratio(&self) -> Option<(u32, u32)> {
+        if self.preset.is_scaled() {
+            Some((self.preset.safe_numerator(), self.preset.safe_denominator()))
+        } else {
+            None
         }
     }
 
     fn effective_size(&self) -> u32 {
         if self.size == 0 {
-            self.font.native_size.max(1)
+            if self.preset.font.native_size == 0 {
+                1
+            } else {
+                self.preset.font.native_size
+            }
         } else {
             self.size
         }
     }
 
+    fn rendered_glyph_box_w(&self, glyph: &GlyphMetrics) -> u32 {
+        if self.preset.is_scaled() {
+            FontPreset::scaled_box_w_for_ratio(
+                glyph,
+                self.preset.safe_numerator(),
+                self.preset.safe_denominator(),
+            )
+        } else {
+            glyph.box_w
+        }
+    }
+
+    fn rendered_glyph_box_h(&self, glyph: &GlyphMetrics) -> u32 {
+        if self.preset.is_scaled() {
+            FontPreset::scaled_box_h_for_ratio(
+                glyph,
+                self.preset.safe_numerator(),
+                self.preset.safe_denominator(),
+            )
+        } else {
+            glyph.box_h
+        }
+    }
+
+    fn rendered_glyph_ofs_y(&self, glyph: &GlyphMetrics) -> i32 {
+        if self.preset.is_scaled() {
+            FontPreset::scaled_ofs_y_for_ratio(
+                glyph,
+                self.preset.safe_numerator(),
+                self.preset.safe_denominator(),
+            )
+        } else {
+            glyph.ofs_y
+        }
+    }
+
     fn scaled_vertical_metric(&self, value: u32) -> u32 {
-        let native = self.font.native_size.max(1);
+        let native = self.font_data().native_size.max(1);
         let scaled = scale_u32(value, self.effective_size(), native);
 
         if value > 0 { scaled.max(1) } else { 0 }
     }
 
     fn scaled_line_height(&self) -> u32 {
-        self.scaled_vertical_metric(self.font.line_height)
+        self.scaled_vertical_metric(self.font_data().line_height)
     }
 
     fn scaled_baseline_from_bottom(&self) -> u32 {
         scale_u32(
-            self.font.baseline,
+            self.font_data().baseline,
             self.effective_size(),
-            self.font.native_size.max(1),
+            self.font_data().native_size.max(1),
         )
     }
 
@@ -237,15 +475,15 @@ where
 
     fn character_width(&self, character: char) -> u32 {
         if character.is_ascii() {
-            self.ascii_width
+            self.preset.half_width
         } else {
-            self.non_ascii_width
+            self.preset.full_width
         }
     }
 
     fn glyph_x_offset(&self, character: char, glyph: &GlyphMetrics) -> i32 {
         let cell_width = self.character_width(character) as i32;
-        let glyph_width = glyph.box_w as i32;
+        let glyph_width = self.rendered_glyph_box_w(glyph) as i32;
 
         (cell_width - glyph_width) / 2
     }
@@ -271,30 +509,28 @@ where
     fn glyph_origin(&self, character: char, cell_origin: Point, glyph: &GlyphMetrics) -> Point {
         let y = self
             .scaled_alphabetic_baseline_offset()
-            .saturating_sub(glyph.box_h);
+            .saturating_sub(self.rendered_glyph_box_h(glyph));
 
         cell_origin
             + Point::new(
                 self.glyph_x_offset(character, glyph),
-                u32_to_i32_sat(y).saturating_sub(glyph.ofs_y),
+                u32_to_i32_sat(y).saturating_sub(self.rendered_glyph_ofs_y(glyph)),
             )
     }
 
     fn glyph_bit(&self, glyph: &GlyphMetrics, x: u32, y: u32) -> bool {
-        if x >= glyph.box_w || y >= glyph.box_h {
-            return false;
+        if self.preset.is_scaled() {
+            FontPreset::interpolated_glyph_bit_for_ratio(
+                self.font_data(),
+                glyph,
+                self.preset.safe_numerator(),
+                self.preset.safe_denominator(),
+                x,
+                y,
+            )
+        } else {
+            glyph_bitmap_bit(self.font_data(), glyph, x, y)
         }
-
-        let bit_index = y as usize * glyph.box_w as usize + x as usize;
-        let byte_index = glyph.bitmap_index as usize + bit_index / 8;
-
-        let Some(byte) = self.font.bitmap.get(byte_index) else {
-            return false;
-        };
-
-        let shift = 7 - (bit_index % 8);
-
-        (byte >> shift) & 1 != 0
     }
 
     fn draw_glyph<D>(
@@ -307,14 +543,18 @@ where
     where
         D: DrawTarget<Color = C>,
     {
-        let Some(color) = self.text_color else {
+        if self.text_transparent {
             return Ok(());
-        };
+        }
+
+        let color = self.text_color;
 
         let origin = self.glyph_origin(character, cell_origin, glyph);
+        let glyph_w = self.rendered_glyph_box_w(glyph);
+        let glyph_h = self.rendered_glyph_box_h(glyph);
 
-        for y in 0..glyph.box_h {
-            for x in 0..glyph.box_w {
+        for y in 0..glyph_h {
+            for x in 0..glyph_w {
                 if self.glyph_bit(glyph, x, y) {
                     target.draw_iter(core::iter::once(Pixel(
                         origin + Point::new(u32_to_i32_sat(x), u32_to_i32_sat(y)),
@@ -353,7 +593,7 @@ where
 
             self.draw_background(width, cell_origin, target)?;
 
-            if let Some(glyph) = self.font.glyph_for_char(character) {
+            if let Some(glyph) = self.font_data().glyph_for_char(character) {
                 self.draw_glyph(character, glyph, cell_origin, target)?;
             }
 
@@ -405,7 +645,12 @@ where
     type Color = C;
 
     fn set_text_color(&mut self, text_color: Option<Self::Color>) {
-        self.text_color = text_color;
+        if let Some(text_color) = text_color {
+            self.text_color = text_color;
+            self.text_transparent = false;
+        } else {
+            self.text_transparent = true;
+        }
     }
 
     fn set_background_color(&mut self, background_color: Option<Self::Color>) {
@@ -417,9 +662,83 @@ where
     fn set_strikethrough_color(&mut self, _strikethrough_color: DecorationColor<Self::Color>) {}
 }
 
-fn scale_u32(value: u32, size: u32, native_size: u32) -> u32 {
+const fn scale_u32(value: u32, size: u32, native_size: u32) -> u32 {
     let numerator = value as u64 * size as u64 + (native_size as u64 / 2);
     (numerator / native_size as u64) as u32
+}
+
+const fn scale_ratio_nonzero(value: u32, numerator: u32, denominator: u32) -> u32 {
+    if value == 0 {
+        0
+    } else {
+        let numerator = if numerator == 0 { 1 } else { numerator };
+        let denominator = if denominator == 0 { 1 } else { denominator };
+        let scaled = scale_u32(value, numerator, denominator);
+
+        if scaled == 0 { 1 } else { scaled }
+    }
+}
+
+const fn mul_scale_ratio(lhs: u32, rhs: u32) -> u32 {
+    let product = lhs as u64 * rhs as u64;
+
+    if product > u32::MAX as u64 {
+        u32::MAX
+    } else {
+        product as u32
+    }
+}
+
+const fn scale_i32_ratio(value: i32, numerator: u32, denominator: u32) -> i32 {
+    if value == 0 {
+        0
+    } else {
+        let numerator = if numerator == 0 { 1 } else { numerator } as i64;
+        let denominator = if denominator == 0 { 1 } else { denominator } as i64;
+        let sign = if value < 0 { -1 } else { 1 };
+        let abs = value.abs() as i64;
+        let scaled = (abs * numerator + (denominator / 2)) / denominator;
+        let signed = scaled * sign;
+
+        if signed > i32::MAX as i64 {
+            i32::MAX
+        } else if signed < i32::MIN as i64 {
+            i32::MIN
+        } else {
+            signed as i32
+        }
+    }
+}
+
+fn glyph_bitmap_bit(font: &FontData<'_>, glyph: &GlyphMetrics, x: u32, y: u32) -> bool {
+    if x >= glyph.box_w || y >= glyph.box_h {
+        return false;
+    }
+
+    let bit_index = y as usize * glyph.box_w as usize + x as usize;
+    let byte_index = glyph.bitmap_index as usize + bit_index / 8;
+
+    let Some(byte) = font.bitmap.get(byte_index) else {
+        return false;
+    };
+
+    let shift = 7 - (bit_index % 8);
+
+    (byte >> shift) & 1 != 0
+}
+
+fn scaled_source_coordinate(dst: u32, src_len: u32, dst_len: u32) -> (u32, u32) {
+    if src_len <= 1 || dst_len == 0 {
+        return (0, 0);
+    }
+
+    let max_fp = (src_len.saturating_sub(1) as i64) * 256;
+    let pos_fp = ((((dst as i64) * 2 + 1) * src_len as i64 * 256) / ((dst_len as i64) * 2)) - 128;
+    let clamped = pos_fp.clamp(0, max_fp);
+    let base = (clamped / 256) as u32;
+    let frac = (clamped % 256) as u32;
+
+    (base, frac)
 }
 
 const fn utf8_char_count(text: &str) -> usize {
@@ -469,8 +788,9 @@ mod tests {
 
     const HELLO_FONT: FontData<'static> =
         FontData::new(HELLO_BITMAP, HELLO_SYMBOLS, HELLO_METRICS, 20, 18, 1);
+    const HELLO_PRESET: FontPreset<'static> = FontPreset::new(HELLO_FONT, 8, 16, 20);
     const HELLO_STYLE: EgTextStyle<'static, BinaryColor> =
-        EgTextStyle::new(&HELLO_FONT, BinaryColor::On, 20, 8, 16);
+        EgTextStyle::new(&HELLO_PRESET, BinaryColor::On, 20);
 
     const SIMPLE_BITMAP: &[u8] = &[0b1100_0000];
     const SIMPLE_SYMBOLS: &str = "A哈";
@@ -480,17 +800,26 @@ mod tests {
     ];
     const SIMPLE_FONT: FontData<'static> =
         FontData::new(SIMPLE_BITMAP, SIMPLE_SYMBOLS, SIMPLE_METRICS, 10, 10, 2);
+    const SIMPLE_PRESET: FontPreset<'static> = FontPreset::new(SIMPLE_FONT, 3, 5, 10);
+
+    const UNIT_BITMAP: &[u8] = &[0b1000_0000];
+    const UNIT_SYMBOLS: &str = "A";
+    const UNIT_METRICS: &[GlyphMetrics] = &[GlyphMetrics::new(0, 1, 1, 1, 0, 0)];
+    const UNIT_FONT: FontData<'static> =
+        FontData::new(UNIT_BITMAP, UNIT_SYMBOLS, UNIT_METRICS, 1, 1, 0);
+    const UNIT_PRESET: FontPreset<'static> = FontPreset::new(UNIT_FONT, 1, 1, 1);
 
     const BASELINE_FONT: FontData<'static> = FontData::new(&[], "", &[], 10, 10, 3);
+    const BASELINE_PRESET: FontPreset<'static> = FontPreset::new(BASELINE_FONT, 4, 8, 10);
 
     #[test]
     fn const_construction_works() {
         const STYLE: EgTextStyle<'static, BinaryColor> =
-            EgTextStyle::new(&HELLO_FONT, BinaryColor::On, 20, 8, 16);
+            EgTextStyle::new(&HELLO_PRESET, BinaryColor::On, 20);
 
-        assert_eq!(STYLE.font.native_size, 20);
-        assert_eq!(STYLE.ascii_width, 8);
-        assert_eq!(STYLE.non_ascii_width, 16);
+        assert_eq!(STYLE.preset.font.native_size, 20);
+        assert_eq!(STYLE.preset.half_width, 8);
+        assert_eq!(STYLE.preset.full_width, 16);
     }
 
     #[test]
@@ -501,13 +830,81 @@ mod tests {
 
     #[test]
     fn font_preset_uses_default_dimensions() {
-        const PRESET: FontPreset<'static> = FontPreset::new(HELLO_FONT, 8, 16, 20);
-        let style = PRESET.default_text_style(BinaryColor::On);
+        let style = HELLO_PRESET.default_text_style(BinaryColor::On);
 
         assert_eq!(style.size, 20);
-        assert_eq!(style.ascii_width, 8);
-        assert_eq!(style.non_ascii_width, 16);
-        assert_eq!(style.font.symbols, HELLO_FONT.symbols);
+        assert_eq!(style.preset.half_width, 8);
+        assert_eq!(style.preset.full_width, 16);
+        assert_eq!(style.preset.font.symbols, HELLO_FONT.symbols);
+        assert_eq!(style.scale_ratio(), None);
+    }
+
+    #[test]
+    fn scaled_font_preset_scales_proportionally() {
+        let scaled = HELLO_PRESET.scaled_ratio(1, 2);
+        let style = scaled.default_text_style(BinaryColor::On);
+
+        assert_eq!(scaled.ascii_width(), 4);
+        assert_eq!(scaled.non_ascii_width(), 8);
+        assert_eq!(scaled.height(), 10);
+        assert_eq!(style.preset.half_width, 4);
+        assert_eq!(style.preset.full_width, 8);
+        assert_eq!(style.size, 10);
+    }
+
+    #[test]
+    fn scaled_font_preset_identity_ratio_uses_original_dimensions() {
+        let scaled = HELLO_PRESET.scaled_ratio(1, 1);
+
+        assert_eq!(scaled.ascii_width(), 8);
+        assert_eq!(scaled.non_ascii_width(), 16);
+        assert_eq!(scaled.height(), 20);
+    }
+
+    #[test]
+    fn scaled_font_preset_supports_fractional_ratio() {
+        let scaled = HELLO_PRESET.scaled_ratio(3, 2);
+        let style = scaled.default_text_style(BinaryColor::On);
+
+        assert_eq!(scaled.ascii_width(), 12);
+        assert_eq!(scaled.non_ascii_width(), 24);
+        assert_eq!(scaled.height(), 30);
+        assert_eq!(style.preset.half_width, 12);
+        assert_eq!(style.preset.full_width, 24);
+        assert_eq!(style.size, 30);
+        assert_eq!(style.scale_ratio(), Some((3, 2)));
+    }
+
+    #[test]
+    fn scaled_font_preset_zero_denominator_falls_back_to_one() {
+        let scaled = HELLO_PRESET.scaled_ratio(3, 0);
+
+        assert_eq!(scaled.ascii_width(), 24);
+        assert_eq!(scaled.non_ascii_width(), 48);
+        assert_eq!(scaled.height(), 60);
+    }
+
+    #[test]
+    fn eg_text_style_from_preset_uses_non_proportional_dimensions() {
+        let style = EgTextStyle::from_preset(&HELLO_PRESET, BinaryColor::On, 18);
+
+        assert_eq!(style.size, 18);
+        assert_eq!(style.preset.half_width, 8);
+        assert_eq!(style.preset.full_width, 16);
+        assert_eq!(style.preset.font.symbols, HELLO_FONT.symbols);
+        assert_eq!(style.scale_ratio(), None);
+    }
+
+    #[test]
+    fn eg_text_style_from_scaled_preset_uses_ratio_dimensions() {
+        let scaled = HELLO_PRESET.scaled_ratio(3, 2);
+        let style = EgTextStyle::from_preset(&scaled, BinaryColor::On, 0);
+
+        assert_eq!(style.size, 30);
+        assert_eq!(style.preset.half_width, 12);
+        assert_eq!(style.preset.full_width, 24);
+        assert_eq!(style.preset.font.symbols, HELLO_FONT.symbols);
+        assert_eq!(style.scale_ratio(), Some((3, 2)));
     }
 
     #[test]
@@ -546,8 +943,9 @@ mod tests {
 
     #[test]
     fn size_changes_vertical_metrics_only() {
-        let small = EgTextStyle::new(&BASELINE_FONT, BinaryColor::On, 10, 6, 12);
-        let large = EgTextStyle::new(&BASELINE_FONT, BinaryColor::On, 30, 6, 12);
+        const WIDE_PRESET: FontPreset<'static> = FontPreset::new(BASELINE_FONT, 6, 12, 10);
+        let small = EgTextStyle::new(&WIDE_PRESET, BinaryColor::On, 10);
+        let large = EgTextStyle::new(&WIDE_PRESET, BinaryColor::On, 30);
 
         let small_metrics = small.measure_string("A哈", Point::new(3, 20), Baseline::Alphabetic);
         let large_metrics = large.measure_string("A哈", Point::new(3, 20), Baseline::Alphabetic);
@@ -561,7 +959,7 @@ mod tests {
 
     #[test]
     fn baseline_offsets_are_respected() {
-        let style = EgTextStyle::new(&BASELINE_FONT, BinaryColor::On, 20, 4, 8);
+        let style = EgTextStyle::new(&BASELINE_PRESET, BinaryColor::On, 20);
         let top = style.measure_string("A", Point::new(10, 30), Baseline::Top);
         let bottom = style.measure_string("A", Point::new(10, 30), Baseline::Bottom);
         let middle = style.measure_string("A", Point::new(10, 30), Baseline::Middle);
@@ -575,7 +973,7 @@ mod tests {
 
     #[test]
     fn draw_string_renders_ascii_and_non_ascii_glyphs() {
-        let style = EgTextStyle::new(&SIMPLE_FONT, BinaryColor::On, 10, 3, 5);
+        let style = EgTextStyle::new(&SIMPLE_PRESET, BinaryColor::On, 10);
         let mut display = MockDisplay::new();
         display.set_allow_out_of_bounds_drawing(true);
 
@@ -590,7 +988,7 @@ mod tests {
 
     #[test]
     fn draw_string_with_text_object_uses_renderer() {
-        let style = EgTextStyle::new(&SIMPLE_FONT, BinaryColor::On, 10, 3, 5);
+        let style = EgTextStyle::new(&SIMPLE_PRESET, BinaryColor::On, 10);
         let mut display = MockDisplay::new();
         display.set_allow_out_of_bounds_drawing(true);
 
@@ -605,7 +1003,7 @@ mod tests {
     #[test]
     fn draw_whitespace_fills_background() {
         let style =
-            EgTextStyle::with_background(&SIMPLE_FONT, BinaryColor::On, BinaryColor::Off, 10, 3, 5);
+            EgTextStyle::with_background(&SIMPLE_PRESET, BinaryColor::On, BinaryColor::Off, 10);
         let mut display = MockDisplay::new();
         display.set_allow_out_of_bounds_drawing(true);
 
@@ -618,5 +1016,23 @@ mod tests {
             display.affected_area(),
             Rectangle::new(Point::new(2, 3), Size::new(4, 10))
         );
+    }
+
+    #[test]
+    fn scaled_font_preset_interpolates_glyph_bitmap() {
+        let scaled = UNIT_PRESET.scaled_ratio(2, 1);
+        let style = scaled.default_text_style(BinaryColor::On);
+        let mut display = MockDisplay::new();
+        display.set_allow_out_of_bounds_drawing(true);
+
+        let next = style
+            .draw_string("A", Point::zero(), Baseline::Top, &mut display)
+            .unwrap();
+
+        assert_eq!(next, Point::new(2, 0));
+        assert_eq!(display.get_pixel(Point::new(0, 0)), Some(BinaryColor::On));
+        assert_eq!(display.get_pixel(Point::new(1, 0)), Some(BinaryColor::On));
+        assert_eq!(display.get_pixel(Point::new(0, 1)), Some(BinaryColor::On));
+        assert_eq!(display.get_pixel(Point::new(1, 1)), Some(BinaryColor::On));
     }
 }

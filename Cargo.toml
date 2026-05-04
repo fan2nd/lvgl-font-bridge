@@ -10,8 +10,3 @@ macros = ["dep:lvgl-font-bridge-macros"]
 [dependencies]
 embedded-graphics = { version = "0.8.2", default-features = false }
 lvgl-font-bridge-macros = { path = "lvgl-font-bridge-macros", optional = true }
-
-[[test]]
-name = "macro"
-path = "tests/macro.rs"
-required-features = ["macros"]

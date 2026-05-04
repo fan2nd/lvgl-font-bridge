@@ -15,6 +15,7 @@ struct FontMacroInput {
     half_width: LitInt,
     full_width: LitInt,
     height: LitInt,
+    scaled_height: Option<LitInt>,
 }
 
 impl Parse for FontMacroInput {
@@ -23,6 +24,7 @@ impl Parse for FontMacroInput {
         let mut half_width = None;
         let mut full_width = None;
         let mut height = None;
+        let mut scaled_height = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -33,10 +35,11 @@ impl Parse for FontMacroInput {
                 "half_width" => half_width = Some(input.parse()?),
                 "full_width" => full_width = Some(input.parse()?),
                 "height" => height = Some(input.parse()?),
+                "scaled_height" => scaled_height = Some(input.parse()?),
                 _ => {
                     return Err(syn::Error::new(
                         key.span(),
-                        "expected one of: path, half_width, full_width, height",
+                        "expected one of: path, half_width, full_width, height, scaled_height",
                     ));
                 }
             }
@@ -53,6 +56,7 @@ impl Parse for FontMacroInput {
             full_width: full_width
                 .ok_or_else(|| syn::Error::new(Span::call_site(), "missing `full_width`"))?,
             height: height.ok_or_else(|| syn::Error::new(Span::call_site(), "missing `height`"))?,
+            scaled_height,
         })
     }
 }
@@ -108,6 +112,7 @@ fn expand_font_macro(input: FontMacroInput) -> Result<TokenStream2> {
     let half_width = &input.half_width;
     let full_width = &input.full_width;
     let height = &input.height;
+    let scaled_height = input.scaled_height.as_ref();
 
     let metrics = parsed.metrics.iter().map(|metric| {
         let bitmap_index = metric.bitmap_index;
@@ -129,24 +134,47 @@ fn expand_font_macro(input: FontMacroInput) -> Result<TokenStream2> {
         }
     });
 
+    let preset_expr = if let Some(scaled_height) = scaled_height {
+        quote! {
+            #crate_path::FontPreset::new(
+                #crate_path::FontData::new(
+                    BITMAP,
+                    SYMBOLS,
+                    METRICS,
+                    #native_size,
+                    #line_height,
+                    #baseline,
+                ),
+                #half_width,
+                #full_width,
+                #height,
+            )
+            .with_scaled_height(#scaled_height)
+        }
+    } else {
+        quote! {
+            #crate_path::FontPreset::new(
+                #crate_path::FontData::new(
+                    BITMAP,
+                    SYMBOLS,
+                    METRICS,
+                    #native_size,
+                    #line_height,
+                    #baseline,
+                ),
+                #half_width,
+                #full_width,
+                #height,
+            )
+        }
+    };
+
     Ok(quote! {{
         const BITMAP: &[u8] = &[#(#bitmap as u8),*];
         const SYMBOLS: &str = #symbols;
         const METRICS: &[#crate_path::GlyphMetrics] = &[#(#metrics),*];
 
-        #crate_path::FontPreset::new(
-            #crate_path::FontData::new(
-                BITMAP,
-                SYMBOLS,
-                METRICS,
-                #native_size,
-                #line_height,
-                #baseline,
-            ),
-            #half_width,
-            #full_width,
-            #height,
-        )
+        #preset_expr
     }})
 }
 
