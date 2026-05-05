@@ -10,8 +10,8 @@ It keeps the original 1bpp glyph bitmap data, but replaces LVGL's numeric charac
   - raw bitmap bytes
   - UTF-8 symbol string
   - glyph metrics
-  - default ASCII width, non-ASCII width, and logical height
-  - native size, line height, and baseline
+  - `FontLayout`
+  - `FontVerticalMetrics`
 - `EgTextStyle` implements:
   - `embedded_graphics::text::renderer::TextRenderer`
   - `embedded_graphics::text::renderer::CharacterStyle`
@@ -28,7 +28,7 @@ It keeps the original 1bpp glyph bitmap data, but replaces LVGL's numeric charac
 `symbols` is a single UTF-8 string. Each character in that string corresponds to one entry in `metrics` at the same index.
 
 ```rust
-use lvgl_font_bridge::{FontData, GlyphMetrics};
+use lvgl_font_bridge::{FontData, FontLayout, FontVerticalMetrics, GlyphMetrics};
 
 const BITMAP: &[u8] = &[0x00, 0x00];
 const SYMBOLS: &str = "1H哈";
@@ -38,7 +38,13 @@ const METRICS: &[GlyphMetrics] = &[
     GlyphMetrics::new(33, 320, 17, 18, 2, -1),
 ];
 
-const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 8, 16, 20, 20, 18, 1);
+const FONT: FontData<'static> = FontData::new(
+    BITMAP,
+    SYMBOLS,
+    METRICS,
+    FontLayout::new(8, 16, 20),
+    FontVerticalMetrics::new(20, 18, 1),
+);
 ```
 
 ## Rendering
@@ -47,11 +53,11 @@ Create an `EgTextStyle` with:
 
 - a `FontPreset`
 - a text color
-- a logical `size`
+- an optional logical `size`
 
 ```rust
 use embedded_graphics::pixelcolor::BinaryColor;
-use lvgl_font_bridge::{EgTextStyle, FontPreset};
+use lvgl_font_bridge::{EgTextStyle, FontLayout, FontPreset, FontVerticalMetrics};
 
 # use lvgl_font_bridge::{FontData, GlyphMetrics};
 # const BITMAP: &[u8] = &[0x00];
@@ -60,9 +66,16 @@ use lvgl_font_bridge::{EgTextStyle, FontPreset};
 #     GlyphMetrics::new(0, 3, 1, 1, 0, 0),
 #     GlyphMetrics::new(0, 5, 1, 1, 1, 0),
 # ];
-# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 8, 16, 20, 10, 10, 2);
+# const FONT: FontData<'static> = FontData::new(
+#     BITMAP,
+#     SYMBOLS,
+#     METRICS,
+#     FontLayout::new(8, 16, 20),
+#     FontVerticalMetrics::new(10, 10, 2),
+# );
 # const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
-let style = EgTextStyle::new(&PRESET, BinaryColor::On, 20);
+let style = EgTextStyle::new(&PRESET, BinaryColor::On);
+let custom_size = EgTextStyle::with_size(&PRESET, BinaryColor::On, 24);
 ```
 
 Then use it with `embedded-graphics::text::Text`.
@@ -73,7 +86,7 @@ If you want half-width, full-width, and height to scale together based on the or
 
 ```rust
 use embedded_graphics::pixelcolor::BinaryColor;
-use lvgl_font_bridge::{FontData, FontPreset, GlyphMetrics};
+use lvgl_font_bridge::{FontData, FontLayout, FontPreset, FontVerticalMetrics, GlyphMetrics};
 
 # const BITMAP: &[u8] = &[0x00];
 # const SYMBOLS: &str = "A哈";
@@ -81,7 +94,13 @@ use lvgl_font_bridge::{FontData, FontPreset, GlyphMetrics};
 #     GlyphMetrics::new(0, 3, 1, 1, 0, 0),
 #     GlyphMetrics::new(0, 5, 1, 1, 1, 0),
 # ];
-# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 8, 16, 20, 10, 10, 2);
+# const FONT: FontData<'static> = FontData::new(
+#     BITMAP,
+#     SYMBOLS,
+#     METRICS,
+#     FontLayout::new(8, 16, 20),
+#     FontVerticalMetrics::new(10, 10, 2),
+# );
 const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
 
 let scaled = PRESET.scaled_ratio(1, 2);
@@ -100,18 +119,24 @@ When a style is created from `scaled_ratio(...)`, glyph rendering also uses inte
 
 ```rust
 # use embedded_graphics::pixelcolor::BinaryColor;
-# use lvgl_font_bridge::{EgTextStyle, FontData, FontPreset, GlyphMetrics};
+# use lvgl_font_bridge::{EgTextStyle, FontData, FontLayout, FontPreset, FontVerticalMetrics, GlyphMetrics};
 # const BITMAP: &[u8] = &[0x00];
 # const SYMBOLS: &str = "A哈";
 # const METRICS: &[GlyphMetrics] = &[
 #     GlyphMetrics::new(0, 3, 1, 1, 0, 0),
 #     GlyphMetrics::new(0, 5, 1, 1, 1, 0),
 # ];
-# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 8, 16, 20, 10, 10, 2);
+# const FONT: FontData<'static> = FontData::new(
+#     BITMAP,
+#     SYMBOLS,
+#     METRICS,
+#     FontLayout::new(8, 16, 20),
+#     FontVerticalMetrics::new(10, 10, 2),
+# );
 # const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
-let fixed = EgTextStyle::from_preset(&PRESET, BinaryColor::On, 20);
+let fixed = EgTextStyle::with_size(&PRESET, BinaryColor::On, 20);
 let scaled = PRESET.scaled_ratio(3, 2);
-let proportional = EgTextStyle::from_preset(&scaled, BinaryColor::On, 0);
+let proportional = EgTextStyle::new(&scaled, BinaryColor::On);
 
 assert_eq!(fixed.scale_ratio(), None);
 assert_eq!(proportional.scale_ratio(), Some((3, 2)));
@@ -120,14 +145,20 @@ assert_eq!(proportional.scale_ratio(), Some((3, 2)));
 For non-integer ratios:
 
 ```rust
-# use lvgl_font_bridge::{FontData, FontPreset, GlyphMetrics};
+# use lvgl_font_bridge::{FontData, FontLayout, FontPreset, FontVerticalMetrics, GlyphMetrics};
 # const BITMAP: &[u8] = &[0x00];
 # const SYMBOLS: &str = "A哈";
 # const METRICS: &[GlyphMetrics] = &[
 #     GlyphMetrics::new(0, 3, 1, 1, 0, 0),
 #     GlyphMetrics::new(0, 5, 1, 1, 1, 0),
 # ];
-# const FONT: FontData<'static> = FontData::new(BITMAP, SYMBOLS, METRICS, 8, 16, 20, 10, 10, 2);
+# const FONT: FontData<'static> = FontData::new(
+#     BITMAP,
+#     SYMBOLS,
+#     METRICS,
+#     FontLayout::new(8, 16, 20),
+#     FontVerticalMetrics::new(10, 10, 2),
+# );
 const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
 
 let scaled = PRESET.scaled_ratio(3, 2);
@@ -157,6 +188,7 @@ The macro returns `FontData`, which contains:
 - `half_width`
 - `full_width`
 - `height`
+- native vertical metrics
 
 Convert it to `FontPreset` with `const` functions:
 
@@ -188,8 +220,10 @@ let bigger = PRESET.text_style(BinaryColor::On, 18);
 - Missing glyphs still advance:
   - ASCII characters use `ascii_width`
   - all other characters use `non_ascii_width`
-- `size == 0` falls back to the font's `native_size`
 - `adv_w` is preserved from LVGL data, but current horizontal layout uses the user-specified widths instead
+- `EgTextStyle::new(...)` uses the preset height as its default logical size
+- `EgTextStyle::with_size(...)` and `EgTextStyle::with_background_and_size(...)` require `size != 0`
+- `FontPreset::scaled_ratio(...)` and `FontPreset::with_scaled_height(...)` require non-zero scale inputs
 - `with_scaled_height(...)` only changes bitmap interpolation ratio; it does not auto-resize `half_width`, `full_width`, or `height`
 
 ## Limitations

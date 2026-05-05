@@ -138,12 +138,8 @@ fn expand_font_macro(input: FontMacroInput) -> Result<TokenStream2> {
             BITMAP,
             SYMBOLS,
             METRICS,
-            #half_width,
-            #full_width,
-            #height,
-            #native_size,
-            #line_height,
-            #baseline,
+            #crate_path::FontLayout::new(#half_width, #full_width, #height),
+            #crate_path::FontVerticalMetrics::new(#native_size, #line_height, #baseline),
         )
     }})
 }

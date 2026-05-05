@@ -46,18 +46,52 @@ impl GlyphMetrics {
     }
 }
 
+/// Default horizontal and logical height settings for a font.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FontLayout {
+    pub half_width: u32,
+    pub full_width: u32,
+    pub height: u32,
+}
+
+impl FontLayout {
+    /// Creates default horizontal and logical height settings.
+    pub const fn new(half_width: u32, full_width: u32, height: u32) -> Self {
+        Self {
+            half_width,
+            full_width,
+            height,
+        }
+    }
+}
+
+/// Vertical metrics for a font's native bitmap size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FontVerticalMetrics {
+    pub native_size: u32,
+    pub line_height: u32,
+    pub baseline: u32,
+}
+
+impl FontVerticalMetrics {
+    /// Creates vertical metrics for the font's native bitmap size.
+    pub const fn new(native_size: u32, line_height: u32, baseline: u32) -> Self {
+        Self {
+            native_size,
+            line_height,
+            baseline,
+        }
+    }
+}
+
 /// Static font data derived from an LVGL-generated font.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FontData<'a> {
     pub bitmap: &'a [u8],
     pub symbols: &'a str,
     pub metrics: &'a [GlyphMetrics],
-    pub half_width: u32,
-    pub full_width: u32,
-    pub height: u32,
-    pub native_size: u32,
-    pub line_height: u32,
-    pub baseline: u32,
+    pub layout: FontLayout,
+    pub vertical_metrics: FontVerticalMetrics,
 }
 
 impl<'a> FontData<'a> {
@@ -66,12 +100,8 @@ impl<'a> FontData<'a> {
         bitmap: &'a [u8],
         symbols: &'a str,
         metrics: &'a [GlyphMetrics],
-        half_width: u32,
-        full_width: u32,
-        height: u32,
-        native_size: u32,
-        line_height: u32,
-        baseline: u32,
+        layout: FontLayout,
+        vertical_metrics: FontVerticalMetrics,
     ) -> Self {
         assert!(utf8_char_count(symbols) == metrics.len());
 
@@ -79,13 +109,19 @@ impl<'a> FontData<'a> {
             bitmap,
             symbols,
             metrics,
-            half_width,
-            full_width,
-            height,
-            native_size,
-            line_height,
-            baseline,
+            layout,
+            vertical_metrics,
         }
+    }
+
+    /// Returns the default horizontal and logical height settings.
+    pub const fn layout(&self) -> FontLayout {
+        self.layout
+    }
+
+    /// Returns the font's native vertical metrics.
+    pub const fn vertical_metrics(&self) -> FontVerticalMetrics {
+        self.vertical_metrics
     }
 
     /// Finds a glyph by a single Unicode scalar value.
@@ -126,27 +162,27 @@ impl<'a> FontPreset<'a> {
     /// Returns the preset ASCII width.
     pub const fn ascii_width(&self) -> u32 {
         scale_ratio_nonzero(
-            self.font.half_width,
-            self.safe_numerator(),
-            self.safe_denominator(),
+            self.font.layout.half_width,
+            self.numerator(),
+            self.denominator(),
         )
     }
 
     /// Returns the preset non-ASCII width.
     pub const fn non_ascii_width(&self) -> u32 {
         scale_ratio_nonzero(
-            self.font.full_width,
-            self.safe_numerator(),
-            self.safe_denominator(),
+            self.font.layout.full_width,
+            self.numerator(),
+            self.denominator(),
         )
     }
 
     /// Returns the preset logical height.
     pub const fn height(&self) -> u32 {
         scale_ratio_nonzero(
-            self.font.height,
-            self.safe_numerator(),
-            self.safe_denominator(),
+            self.font.layout.height,
+            self.numerator(),
+            self.denominator(),
         )
     }
 
@@ -155,7 +191,7 @@ impl<'a> FontPreset<'a> {
     where
         C: PixelColor,
     {
-        EgTextStyle::from_preset(self, text_color, size)
+        EgTextStyle::with_size(self, text_color, size)
     }
 
     /// Builds a text style using the preset height as the default size.
@@ -163,69 +199,45 @@ impl<'a> FontPreset<'a> {
     where
         C: PixelColor,
     {
-        self.text_style(text_color, self.height())
+        EgTextStyle::new(self, text_color)
     }
 
-    /// Returns the effective scale numerator with zero mapped to one.
-    pub const fn safe_numerator(&self) -> u32 {
-        if self.scale_numerator == 0 {
-            1
-        } else {
-            self.scale_numerator
-        }
+    /// Returns the effective scale numerator.
+    pub const fn numerator(&self) -> u32 {
+        self.scale_numerator
     }
 
-    /// Returns the effective scale denominator with zero mapped to one.
-    pub const fn safe_denominator(&self) -> u32 {
-        if self.scale_denominator == 0 {
-            1
-        } else {
-            self.scale_denominator
-        }
+    /// Returns the effective scale denominator.
+    pub const fn denominator(&self) -> u32 {
+        self.scale_denominator
     }
 
     /// Returns whether this preset renders glyphs with proportional bitmap scaling.
     pub const fn is_scaled(&self) -> bool {
-        self.safe_numerator() != self.safe_denominator()
+        self.numerator() != self.denominator()
     }
 
     /// Sets the bitmap scaling ratio without changing the stored base font metrics.
     pub const fn with_scale_ratio(mut self, numerator: u32, denominator: u32) -> Self {
-        self.scale_numerator = if numerator == 0 { 1 } else { numerator };
-        self.scale_denominator = if denominator == 0 { 1 } else { denominator };
+        assert!(numerator != 0);
+        assert!(denominator != 0);
+        self.scale_numerator = numerator;
+        self.scale_denominator = denominator;
         self
     }
 
     /// Sets the bitmap scaling target height without changing the stored base font metrics.
     pub const fn with_scaled_height(self, scaled_height: u32) -> Self {
-        let target_height = if scaled_height == 0 {
-            if self.font.native_size == 0 {
-                1
-            } else {
-                self.font.native_size
-            }
-        } else {
-            scaled_height
-        };
-
-        self.with_scale_ratio(
-            target_height,
-            if self.font.native_size == 0 {
-                1
-            } else {
-                self.font.native_size
-            },
-        )
+        assert!(scaled_height != 0);
+        let native_size = non_zero_or_one(self.font.vertical_metrics.native_size);
+        self.with_scale_ratio(scaled_height, native_size)
     }
 
     /// Returns a new preset with width, height, and bitmap rendering scaled together.
     pub const fn scaled_ratio(&self, numerator: u32, denominator: u32) -> Self {
-        let numerator = if numerator == 0 { 1 } else { numerator };
-        let denominator = if denominator == 0 { 1 } else { denominator };
-
         self.with_scale_ratio(
-            mul_scale_ratio(self.safe_numerator(), numerator),
-            mul_scale_ratio(self.safe_denominator(), denominator),
+            mul_scale_ratio(self.numerator(), numerator),
+            mul_scale_ratio(self.denominator(), denominator),
         )
     }
 
@@ -320,30 +332,25 @@ impl<'a, C> EgTextStyle<'a, C>
 where
     C: PixelColor,
 {
-    /// Creates a text style from a font preset.
-    pub const fn from_preset(preset: &'a FontPreset<'a>, text_color: C, size: u32) -> Self {
-        Self::new(preset, text_color, size)
-    }
-
     /// Creates a text style with a transparent background.
-    pub const fn new(preset: &'a FontPreset<'a>, text_color: C, size: u32) -> Self {
+    pub const fn new(preset: &'a FontPreset<'a>, text_color: C) -> Self {
         Self {
             preset,
             text_color,
             background_color: None,
-            size: if size == 0 {
-                if preset.height() == 0 {
-                    if preset.font.native_size == 0 {
-                        1
-                    } else {
-                        preset.font.native_size
-                    }
-                } else {
-                    preset.height()
-                }
-            } else {
-                size
-            },
+            size: preset.height(),
+            text_transparent: false,
+        }
+    }
+
+    /// Creates a text style with an explicit logical size.
+    pub const fn with_size(preset: &'a FontPreset<'a>, text_color: C, size: u32) -> Self {
+        assert!(size != 0);
+        Self {
+            preset,
+            text_color,
+            background_color: None,
+            size,
             text_transparent: false,
         }
     }
@@ -353,37 +360,31 @@ where
         preset: &'a FontPreset<'a>,
         text_color: C,
         background_color: C,
-        size: u32,
     ) -> Self {
         Self {
             preset,
             text_color,
             background_color: Some(background_color),
-            size: if size == 0 {
-                if preset.height() == 0 {
-                    if preset.font.native_size == 0 {
-                        1
-                    } else {
-                        preset.font.native_size
-                    }
-                } else {
-                    preset.height()
-                }
-            } else {
-                size
-            },
+            size: preset.height(),
             text_transparent: false,
         }
     }
 
-    /// Creates a text style with background color from a font preset.
-    pub const fn with_background_from_preset(
+    /// Creates a text style with background color and an explicit logical size.
+    pub const fn with_background_and_size(
         preset: &'a FontPreset<'a>,
         text_color: C,
         background_color: C,
         size: u32,
     ) -> Self {
-        Self::with_background(preset, text_color, background_color, size)
+        assert!(size != 0);
+        Self {
+            preset,
+            text_color,
+            background_color: Some(background_color),
+            size,
+            text_transparent: false,
+        }
     }
 
     /// Returns the effective font data used by this style.
@@ -394,30 +395,22 @@ where
     /// Returns the effective scale ratio if this style was created from a scaled preset.
     pub const fn scale_ratio(&self) -> Option<(u32, u32)> {
         if self.preset.is_scaled() {
-            Some((self.preset.safe_numerator(), self.preset.safe_denominator()))
+            Some((self.preset.numerator(), self.preset.denominator()))
         } else {
             None
         }
     }
 
     fn effective_size(&self) -> u32 {
-        if self.size == 0 {
-            if self.preset.font.native_size == 0 {
-                1
-            } else {
-                self.preset.font.native_size
-            }
-        } else {
-            self.size
-        }
+        self.size
     }
 
     fn rendered_glyph_box_w(&self, glyph: &GlyphMetrics) -> u32 {
         if self.preset.is_scaled() {
             FontPreset::scaled_box_w_for_ratio(
                 glyph,
-                self.preset.safe_numerator(),
-                self.preset.safe_denominator(),
+                self.preset.numerator(),
+                self.preset.denominator(),
             )
         } else {
             glyph.box_w
@@ -428,8 +421,8 @@ where
         if self.preset.is_scaled() {
             FontPreset::scaled_box_h_for_ratio(
                 glyph,
-                self.preset.safe_numerator(),
-                self.preset.safe_denominator(),
+                self.preset.numerator(),
+                self.preset.denominator(),
             )
         } else {
             glyph.box_h
@@ -440,8 +433,8 @@ where
         if self.preset.is_scaled() {
             FontPreset::scaled_ofs_y_for_ratio(
                 glyph,
-                self.preset.safe_numerator(),
-                self.preset.safe_denominator(),
+                self.preset.numerator(),
+                self.preset.denominator(),
             )
         } else {
             glyph.ofs_y
@@ -449,21 +442,21 @@ where
     }
 
     fn scaled_vertical_metric(&self, value: u32) -> u32 {
-        let native = self.font_data().native_size.max(1);
+        let native = non_zero_or_one(self.font_data().vertical_metrics.native_size);
         let scaled = scale_u32(value, self.effective_size(), native);
 
         if value > 0 { scaled.max(1) } else { 0 }
     }
 
     fn scaled_line_height(&self) -> u32 {
-        self.scaled_vertical_metric(self.font_data().line_height)
+        self.scaled_vertical_metric(self.font_data().vertical_metrics.line_height)
     }
 
     fn scaled_baseline_from_bottom(&self) -> u32 {
         scale_u32(
-            self.font_data().baseline,
+            self.font_data().vertical_metrics.baseline,
             self.effective_size(),
-            self.font_data().native_size.max(1),
+            non_zero_or_one(self.font_data().vertical_metrics.native_size),
         )
     }
 
@@ -533,8 +526,8 @@ where
             FontPreset::interpolated_glyph_bit_for_ratio(
                 self.font_data(),
                 glyph,
-                self.preset.safe_numerator(),
-                self.preset.safe_denominator(),
+                self.preset.numerator(),
+                self.preset.denominator(),
                 x,
                 y,
             )
@@ -699,6 +692,10 @@ const fn mul_scale_ratio(lhs: u32, rhs: u32) -> u32 {
     }
 }
 
+const fn non_zero_or_one(value: u32) -> u32 {
+    if value == 0 { 1 } else { value }
+}
+
 const fn scale_i32_ratio(value: i32, numerator: u32, denominator: u32) -> i32 {
     if value == 0 {
         0
@@ -800,16 +797,12 @@ mod tests {
         HELLO_BITMAP,
         HELLO_SYMBOLS,
         HELLO_METRICS,
-        8,
-        16,
-        20,
-        20,
-        18,
-        1,
+        FontLayout::new(8, 16, 20),
+        FontVerticalMetrics::new(20, 18, 1),
     );
     const HELLO_PRESET: FontPreset<'static> = FontPreset::new(&HELLO_FONT);
     const HELLO_STYLE: EgTextStyle<'static, BinaryColor> =
-        EgTextStyle::new(&HELLO_PRESET, BinaryColor::On, 20);
+        EgTextStyle::new(&HELLO_PRESET, BinaryColor::On);
 
     const SIMPLE_BITMAP: &[u8] = &[0b1100_0000];
     const SIMPLE_SYMBOLS: &str = "A哈";
@@ -821,39 +814,52 @@ mod tests {
         SIMPLE_BITMAP,
         SIMPLE_SYMBOLS,
         SIMPLE_METRICS,
-        3,
-        5,
-        10,
-        10,
-        10,
-        2,
+        FontLayout::new(3, 5, 10),
+        FontVerticalMetrics::new(10, 10, 2),
     );
     const SIMPLE_PRESET: FontPreset<'static> = FontPreset::new(&SIMPLE_FONT);
 
     const UNIT_BITMAP: &[u8] = &[0b1000_0000];
     const UNIT_SYMBOLS: &str = "A";
     const UNIT_METRICS: &[GlyphMetrics] = &[GlyphMetrics::new(0, 1, 1, 1, 0, 0)];
-    const UNIT_FONT: FontData<'static> =
-        FontData::new(UNIT_BITMAP, UNIT_SYMBOLS, UNIT_METRICS, 1, 1, 1, 1, 1, 0);
+    const UNIT_FONT: FontData<'static> = FontData::new(
+        UNIT_BITMAP,
+        UNIT_SYMBOLS,
+        UNIT_METRICS,
+        FontLayout::new(1, 1, 1),
+        FontVerticalMetrics::new(1, 1, 0),
+    );
     const UNIT_PRESET: FontPreset<'static> = FontPreset::new(&UNIT_FONT);
 
-    const BASELINE_FONT: FontData<'static> = FontData::new(&[], "", &[], 4, 8, 10, 10, 10, 3);
+    const BASELINE_FONT: FontData<'static> = FontData::new(
+        &[],
+        "",
+        &[],
+        FontLayout::new(4, 8, 10),
+        FontVerticalMetrics::new(10, 10, 3),
+    );
     const BASELINE_PRESET: FontPreset<'static> = FontPreset::new(&BASELINE_FONT);
 
     #[test]
     fn const_construction_works() {
         const STYLE: EgTextStyle<'static, BinaryColor> =
-            EgTextStyle::new(&HELLO_PRESET, BinaryColor::On, 20);
+            EgTextStyle::new(&HELLO_PRESET, BinaryColor::On);
 
-        assert_eq!(STYLE.preset.font.native_size, 20);
-        assert_eq!(STYLE.preset.font.half_width, 8);
-        assert_eq!(STYLE.preset.font.full_width, 16);
+        assert_eq!(STYLE.preset.font.vertical_metrics.native_size, 20);
+        assert_eq!(STYLE.preset.font.layout.half_width, 8);
+        assert_eq!(STYLE.preset.font.layout.full_width, 16);
     }
 
     #[test]
     #[should_panic]
     fn font_data_requires_matching_lengths() {
-        let _ = FontData::new(&[], "AB", &HELLO_METRICS[..1], 8, 16, 20, 20, 18, 1);
+        let _ = FontData::new(
+            &[],
+            "AB",
+            &HELLO_METRICS[..1],
+            FontLayout::new(8, 16, 20),
+            FontVerticalMetrics::new(20, 18, 1),
+        );
     }
 
     #[test]
@@ -861,8 +867,8 @@ mod tests {
         let style = HELLO_PRESET.default_text_style(BinaryColor::On);
 
         assert_eq!(style.size, 20);
-        assert_eq!(style.preset.font.half_width, 8);
-        assert_eq!(style.preset.font.full_width, 16);
+        assert_eq!(style.preset.font.layout.half_width, 8);
+        assert_eq!(style.preset.font.layout.full_width, 16);
         assert_eq!(style.preset.font.symbols, HELLO_FONT.symbols);
         assert_eq!(style.scale_ratio(), None);
     }
@@ -904,21 +910,18 @@ mod tests {
     }
 
     #[test]
-    fn scaled_font_preset_zero_denominator_falls_back_to_one() {
-        let scaled = HELLO_PRESET.scaled_ratio(3, 0);
-
-        assert_eq!(scaled.ascii_width(), 24);
-        assert_eq!(scaled.non_ascii_width(), 48);
-        assert_eq!(scaled.height(), 60);
+    #[should_panic]
+    fn scaled_font_preset_zero_denominator_panics() {
+        let _ = HELLO_PRESET.scaled_ratio(3, 0);
     }
 
     #[test]
     fn eg_text_style_from_preset_uses_non_proportional_dimensions() {
-        let style = EgTextStyle::from_preset(&HELLO_PRESET, BinaryColor::On, 18);
+        let style = EgTextStyle::with_size(&HELLO_PRESET, BinaryColor::On, 18);
 
         assert_eq!(style.size, 18);
-        assert_eq!(style.preset.font.half_width, 8);
-        assert_eq!(style.preset.font.full_width, 16);
+        assert_eq!(style.preset.font.layout.half_width, 8);
+        assert_eq!(style.preset.font.layout.full_width, 16);
         assert_eq!(style.preset.font.symbols, HELLO_FONT.symbols);
         assert_eq!(style.scale_ratio(), None);
     }
@@ -926,7 +929,7 @@ mod tests {
     #[test]
     fn eg_text_style_from_scaled_preset_uses_ratio_dimensions() {
         let scaled = HELLO_PRESET.scaled_ratio(3, 2);
-        let style = EgTextStyle::from_preset(&scaled, BinaryColor::On, 0);
+        let style = EgTextStyle::new(&scaled, BinaryColor::On);
 
         assert_eq!(style.size, 30);
         assert_eq!(style.preset.ascii_width(), 12);
@@ -971,10 +974,16 @@ mod tests {
 
     #[test]
     fn size_changes_vertical_metrics_only() {
-        const WIDE_FONT: FontData<'static> = FontData::new(&[], "", &[], 6, 12, 10, 10, 10, 3);
+        const WIDE_FONT: FontData<'static> = FontData::new(
+            &[],
+            "",
+            &[],
+            FontLayout::new(6, 12, 10),
+            FontVerticalMetrics::new(10, 10, 3),
+        );
         const WIDE_PRESET: FontPreset<'static> = FontPreset::new(&WIDE_FONT);
-        let small = EgTextStyle::new(&WIDE_PRESET, BinaryColor::On, 10);
-        let large = EgTextStyle::new(&WIDE_PRESET, BinaryColor::On, 30);
+        let small = EgTextStyle::with_size(&WIDE_PRESET, BinaryColor::On, 10);
+        let large = EgTextStyle::with_size(&WIDE_PRESET, BinaryColor::On, 30);
 
         let small_metrics = small.measure_string("A哈", Point::new(3, 20), Baseline::Alphabetic);
         let large_metrics = large.measure_string("A哈", Point::new(3, 20), Baseline::Alphabetic);
@@ -988,7 +997,7 @@ mod tests {
 
     #[test]
     fn baseline_offsets_are_respected() {
-        let style = EgTextStyle::new(&BASELINE_PRESET, BinaryColor::On, 20);
+        let style = EgTextStyle::with_size(&BASELINE_PRESET, BinaryColor::On, 20);
         let top = style.measure_string("A", Point::new(10, 30), Baseline::Top);
         let bottom = style.measure_string("A", Point::new(10, 30), Baseline::Bottom);
         let middle = style.measure_string("A", Point::new(10, 30), Baseline::Middle);
@@ -1002,7 +1011,7 @@ mod tests {
 
     #[test]
     fn draw_string_renders_ascii_and_non_ascii_glyphs() {
-        let style = EgTextStyle::new(&SIMPLE_PRESET, BinaryColor::On, 10);
+        let style = EgTextStyle::with_size(&SIMPLE_PRESET, BinaryColor::On, 10);
         let mut display = MockDisplay::new();
         display.set_allow_out_of_bounds_drawing(true);
 
@@ -1017,7 +1026,7 @@ mod tests {
 
     #[test]
     fn draw_string_with_text_object_uses_renderer() {
-        let style = EgTextStyle::new(&SIMPLE_PRESET, BinaryColor::On, 10);
+        let style = EgTextStyle::with_size(&SIMPLE_PRESET, BinaryColor::On, 10);
         let mut display = MockDisplay::new();
         display.set_allow_out_of_bounds_drawing(true);
 
@@ -1031,8 +1040,12 @@ mod tests {
 
     #[test]
     fn draw_whitespace_fills_background() {
-        let style =
-            EgTextStyle::with_background(&SIMPLE_PRESET, BinaryColor::On, BinaryColor::Off, 10);
+        let style = EgTextStyle::with_background_and_size(
+            &SIMPLE_PRESET,
+            BinaryColor::On,
+            BinaryColor::Off,
+            10,
+        );
         let mut display = MockDisplay::new();
         display.set_allow_out_of_bounds_drawing(true);
 
