@@ -134,22 +134,16 @@ impl<'a> FontData<'a> {
     }
 }
 
-/// A font plus optional bitmap scaling settings.
+/// Base preset data shared by all text styles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FontPreset<'a> {
     pub font: &'a FontData<'a>,
-    pub scale_numerator: u32,
-    pub scale_denominator: u32,
 }
 
 impl<'a> FontPreset<'a> {
     /// Creates a preset from parsed font data.
     pub const fn new(font: &'a FontData<'a>) -> Self {
-        Self {
-            font,
-            scale_numerator: 1,
-            scale_denominator: 1,
-        }
+        Self { font }
     }
 
     /// Returns the underlying font data.
@@ -159,29 +153,17 @@ impl<'a> FontPreset<'a> {
 
     /// Returns the preset ASCII width.
     pub const fn ascii_width(&self) -> u32 {
-        scale_ratio_nonzero(
-            self.font.layout.half_width,
-            self.numerator(),
-            self.denominator(),
-        )
+        self.font.layout.half_width
     }
 
     /// Returns the preset non-ASCII width.
     pub const fn non_ascii_width(&self) -> u32 {
-        scale_ratio_nonzero(
-            self.font.layout.full_width,
-            self.numerator(),
-            self.denominator(),
-        )
+        self.font.layout.full_width
     }
 
     /// Returns the preset default logical height derived from `full_width`.
     pub const fn height(&self) -> u32 {
-        scale_ratio_nonzero(
-            self.font.layout.full_width,
-            self.numerator(),
-            self.denominator(),
-        )
+        self.font.layout.full_width
     }
 
     /// Builds a text style using the preset default logical height.
@@ -190,114 +172,6 @@ impl<'a> FontPreset<'a> {
         C: PixelColor,
     {
         EgTextStyle::new(self, text_color)
-    }
-
-    /// Returns the effective scale numerator.
-    pub const fn numerator(&self) -> u32 {
-        self.scale_numerator
-    }
-
-    /// Returns the effective scale denominator.
-    pub const fn denominator(&self) -> u32 {
-        self.scale_denominator
-    }
-
-    /// Returns whether this preset renders glyphs with proportional bitmap scaling.
-    pub const fn is_scaled(&self) -> bool {
-        self.numerator() != self.denominator()
-    }
-
-    /// Sets the bitmap scaling ratio without changing the stored base font metrics.
-    pub const fn with_scale_ratio(mut self, numerator: u32, denominator: u32) -> Self {
-        assert!(numerator != 0);
-        assert!(denominator != 0);
-        self.scale_numerator = numerator;
-        self.scale_denominator = denominator;
-        self
-    }
-
-    /// Returns a new preset with width, height, and bitmap rendering scaled together.
-    pub const fn scaled_ratio(&self, numerator: u32, denominator: u32) -> Self {
-        self.with_scale_ratio(
-            mul_scale_ratio(self.numerator(), numerator),
-            mul_scale_ratio(self.denominator(), denominator),
-        )
-    }
-
-    /// Scales a glyph width for interpolated rendering.
-    pub const fn scaled_box_w_for_ratio(
-        glyph: &GlyphMetrics,
-        numerator: u32,
-        denominator: u32,
-    ) -> u32 {
-        scale_ratio_nonzero(glyph.box_w, numerator, denominator)
-    }
-
-    /// Scales a glyph height for interpolated rendering.
-    pub const fn scaled_box_h_for_ratio(
-        glyph: &GlyphMetrics,
-        numerator: u32,
-        denominator: u32,
-    ) -> u32 {
-        scale_ratio_nonzero(glyph.box_h, numerator, denominator)
-    }
-
-    /// Scales a vertical glyph offset for interpolated rendering.
-    pub const fn scaled_ofs_y_for_ratio(
-        glyph: &GlyphMetrics,
-        numerator: u32,
-        denominator: u32,
-    ) -> i32 {
-        scale_i32_ratio(glyph.ofs_y, numerator, denominator)
-    }
-
-    /// Samples a scaled glyph pixel using bilinear interpolation over the source bitmap.
-    pub fn interpolated_glyph_bit_for_ratio(
-        font: &FontData<'_>,
-        glyph: &GlyphMetrics,
-        numerator: u32,
-        denominator: u32,
-        x: u32,
-        y: u32,
-    ) -> bool {
-        let dst_w = Self::scaled_box_w_for_ratio(glyph, numerator, denominator);
-        let dst_h = Self::scaled_box_h_for_ratio(glyph, numerator, denominator);
-
-        if dst_w == 0 || dst_h == 0 || x >= dst_w || y >= dst_h {
-            return false;
-        }
-
-        let (src_x, frac_x) = scaled_source_coordinate(x, glyph.box_w, dst_w);
-        let (src_y, frac_y) = scaled_source_coordinate(y, glyph.box_h, dst_h);
-        let src_x1 = (src_x + 1).min(glyph.box_w.saturating_sub(1));
-        let src_y1 = (src_y + 1).min(glyph.box_h.saturating_sub(1));
-
-        let v00 = if glyph_bitmap_bit(font, glyph, src_x, src_y) {
-            255_u32
-        } else {
-            0
-        };
-        let v10 = if glyph_bitmap_bit(font, glyph, src_x1, src_y) {
-            255_u32
-        } else {
-            0
-        };
-        let v01 = if glyph_bitmap_bit(font, glyph, src_x, src_y1) {
-            255_u32
-        } else {
-            0
-        };
-        let v11 = if glyph_bitmap_bit(font, glyph, src_x1, src_y1) {
-            255_u32
-        } else {
-            0
-        };
-
-        let top = v00 * (256 - frac_x) + v10 * frac_x;
-        let bottom = v01 * (256 - frac_x) + v11 * frac_x;
-        let interpolated = (top * (256 - frac_y) + bottom * frac_y + 32_768) >> 16;
-
-        interpolated >= 128
     }
 }
 
@@ -308,6 +182,10 @@ pub struct EgTextStyle<'a, C> {
     pub text_color: C,
     pub background_color: Option<C>,
     text_transparent: bool,
+    #[cfg(feature = "scaling")]
+    scale_numerator: u32,
+    #[cfg(feature = "scaling")]
+    scale_denominator: u32,
 }
 
 impl<'a, C> EgTextStyle<'a, C>
@@ -321,6 +199,10 @@ where
             text_color,
             background_color: None,
             text_transparent: false,
+            #[cfg(feature = "scaling")]
+            scale_numerator: 1,
+            #[cfg(feature = "scaling")]
+            scale_denominator: 1,
         }
     }
 
@@ -335,6 +217,10 @@ where
             text_color,
             background_color: Some(background_color),
             text_transparent: false,
+            #[cfg(feature = "scaling")]
+            scale_numerator: 1,
+            #[cfg(feature = "scaling")]
+            scale_denominator: 1,
         }
     }
 
@@ -343,46 +229,99 @@ where
         self.preset.font
     }
 
-    /// Returns the effective scale ratio if this style was created from a scaled preset.
-    pub const fn scale_ratio(&self) -> Option<(u32, u32)> {
-        if self.preset.is_scaled() {
-            Some((self.preset.numerator(), self.preset.denominator()))
+    #[cfg(feature = "scaling")]
+    /// Sets the proportional scaling ratio for this style.
+    pub const fn with_scale_ratio(mut self, numerator: u32, denominator: u32) -> Self {
+        assert!(numerator != 0);
+        assert!(denominator != 0);
+        self.scale_numerator = numerator;
+        self.scale_denominator = denominator;
+        self
+    }
+
+    #[cfg(feature = "scaling")]
+    /// Returns the proportional scaling ratio used by this style.
+    pub const fn scale_ratio(&self) -> (u32, u32) {
+        (self.scale_numerator, self.scale_denominator)
+    }
+
+    #[cfg(feature = "scaling")]
+    /// Returns whether proportional scaling is active for this style.
+    pub const fn is_scaled(&self) -> bool {
+        self.scale_numerator != 1 || self.scale_denominator != 1
+    }
+
+    #[cfg(not(feature = "scaling"))]
+    fn character_width(&self, character: char) -> u32 {
+        if character.is_ascii() {
+            self.preset.ascii_width()
         } else {
-            None
+            self.preset.non_ascii_width()
         }
     }
 
+    #[cfg(feature = "scaling")]
+    fn character_width(&self, character: char) -> u32 {
+        let base = if character.is_ascii() {
+            self.preset.ascii_width()
+        } else {
+            self.preset.non_ascii_width()
+        };
+
+        scale_ratio_nonzero(base, self.scale_numerator, self.scale_denominator)
+    }
+
+    #[cfg(not(feature = "scaling"))]
+    fn logical_height(&self) -> u32 {
+        self.preset.height()
+    }
+
+    #[cfg(feature = "scaling")]
+    fn logical_height(&self) -> u32 {
+        scale_ratio_nonzero(
+            self.preset.height(),
+            self.scale_numerator,
+            self.scale_denominator,
+        )
+    }
+
+    #[cfg(not(feature = "scaling"))]
     fn rendered_glyph_box_w(&self, glyph: &GlyphMetrics) -> u32 {
-        if self.preset.is_scaled() {
-            FontPreset::scaled_box_w_for_ratio(
-                glyph,
-                self.preset.numerator(),
-                self.preset.denominator(),
-            )
+        glyph.box_w
+    }
+
+    #[cfg(feature = "scaling")]
+    fn rendered_glyph_box_w(&self, glyph: &GlyphMetrics) -> u32 {
+        if self.is_scaled() {
+            scale_ratio_nonzero(glyph.box_w, self.scale_numerator, self.scale_denominator)
         } else {
             glyph.box_w
         }
     }
 
+    #[cfg(not(feature = "scaling"))]
     fn rendered_glyph_box_h(&self, glyph: &GlyphMetrics) -> u32 {
-        if self.preset.is_scaled() {
-            FontPreset::scaled_box_h_for_ratio(
-                glyph,
-                self.preset.numerator(),
-                self.preset.denominator(),
-            )
+        glyph.box_h
+    }
+
+    #[cfg(feature = "scaling")]
+    fn rendered_glyph_box_h(&self, glyph: &GlyphMetrics) -> u32 {
+        if self.is_scaled() {
+            scale_ratio_nonzero(glyph.box_h, self.scale_numerator, self.scale_denominator)
         } else {
             glyph.box_h
         }
     }
 
+    #[cfg(not(feature = "scaling"))]
     fn rendered_glyph_ofs_y(&self, glyph: &GlyphMetrics) -> i32 {
-        if self.preset.is_scaled() {
-            FontPreset::scaled_ofs_y_for_ratio(
-                glyph,
-                self.preset.numerator(),
-                self.preset.denominator(),
-            )
+        glyph.ofs_y
+    }
+
+    #[cfg(feature = "scaling")]
+    fn rendered_glyph_ofs_y(&self, glyph: &GlyphMetrics) -> i32 {
+        if self.is_scaled() {
+            scale_i32_ratio(glyph.ofs_y, self.scale_numerator, self.scale_denominator)
         } else {
             glyph.ofs_y
         }
@@ -390,7 +329,7 @@ where
 
     fn scaled_vertical_metric(&self, value: u32) -> u32 {
         let native = non_zero_or_one(self.font_data().vertical_metrics.native_size);
-        let scaled = scale_u32(value, self.preset.height(), native);
+        let scaled = scale_u32(value, self.logical_height(), native);
 
         if value > 0 { scaled.max(1) } else { 0 }
     }
@@ -402,7 +341,7 @@ where
     fn scaled_baseline_from_bottom(&self) -> u32 {
         scale_u32(
             self.font_data().vertical_metrics.baseline,
-            self.preset.height(),
+            self.logical_height(),
             non_zero_or_one(self.font_data().vertical_metrics.native_size),
         )
     }
@@ -421,14 +360,6 @@ where
             Baseline::Middle => line_height.saturating_sub(1) / 2,
             Baseline::Alphabetic => self.scaled_alphabetic_baseline_offset(),
         })
-    }
-
-    fn character_width(&self, character: char) -> u32 {
-        if character.is_ascii() {
-            self.preset.ascii_width()
-        } else {
-            self.preset.non_ascii_width()
-        }
     }
 
     fn glyph_x_offset(&self, character: char, glyph: &GlyphMetrics) -> i32 {
@@ -468,13 +399,19 @@ where
             )
     }
 
+    #[cfg(not(feature = "scaling"))]
     fn glyph_bit(&self, glyph: &GlyphMetrics, x: u32, y: u32) -> bool {
-        if self.preset.is_scaled() {
-            FontPreset::interpolated_glyph_bit_for_ratio(
+        glyph_bitmap_bit(self.font_data(), glyph, x, y)
+    }
+
+    #[cfg(feature = "scaling")]
+    fn glyph_bit(&self, glyph: &GlyphMetrics, x: u32, y: u32) -> bool {
+        if self.is_scaled() {
+            interpolated_glyph_bit_for_ratio(
                 self.font_data(),
                 glyph,
-                self.preset.numerator(),
-                self.preset.denominator(),
+                self.scale_numerator,
+                self.scale_denominator,
                 x,
                 y,
             )
@@ -616,25 +553,14 @@ const fn scale_u32(value: u32, size: u32, native_size: u32) -> u32 {
     (numerator / native_size as u64) as u32
 }
 
+#[cfg(feature = "scaling")]
 const fn scale_ratio_nonzero(value: u32, numerator: u32, denominator: u32) -> u32 {
     if value == 0 {
         0
     } else {
-        let numerator = if numerator == 0 { 1 } else { numerator };
-        let denominator = if denominator == 0 { 1 } else { denominator };
         let scaled = scale_u32(value, numerator, denominator);
 
         if scaled == 0 { 1 } else { scaled }
-    }
-}
-
-const fn mul_scale_ratio(lhs: u32, rhs: u32) -> u32 {
-    let product = lhs as u64 * rhs as u64;
-
-    if product > u32::MAX as u64 {
-        u32::MAX
-    } else {
-        product as u32
     }
 }
 
@@ -642,15 +568,14 @@ const fn non_zero_or_one(value: u32) -> u32 {
     if value == 0 { 1 } else { value }
 }
 
+#[cfg(feature = "scaling")]
 const fn scale_i32_ratio(value: i32, numerator: u32, denominator: u32) -> i32 {
     if value == 0 {
         0
     } else {
-        let numerator = if numerator == 0 { 1 } else { numerator } as i64;
-        let denominator = if denominator == 0 { 1 } else { denominator } as i64;
         let sign = if value < 0 { -1 } else { 1 };
         let abs = value.abs() as i64;
-        let scaled = (abs * numerator + (denominator / 2)) / denominator;
+        let scaled = (abs * numerator as i64 + (denominator as i64 / 2)) / denominator as i64;
         let signed = scaled * sign;
 
         if signed > i32::MAX as i64 {
@@ -680,6 +605,56 @@ fn glyph_bitmap_bit(font: &FontData<'_>, glyph: &GlyphMetrics, x: u32, y: u32) -
     (byte >> shift) & 1 != 0
 }
 
+#[cfg(feature = "scaling")]
+fn interpolated_glyph_bit_for_ratio(
+    font: &FontData<'_>,
+    glyph: &GlyphMetrics,
+    numerator: u32,
+    denominator: u32,
+    x: u32,
+    y: u32,
+) -> bool {
+    let dst_w = scale_ratio_nonzero(glyph.box_w, numerator, denominator);
+    let dst_h = scale_ratio_nonzero(glyph.box_h, numerator, denominator);
+
+    if dst_w == 0 || dst_h == 0 || x >= dst_w || y >= dst_h {
+        return false;
+    }
+
+    let (src_x, frac_x) = scaled_source_coordinate(x, glyph.box_w, dst_w);
+    let (src_y, frac_y) = scaled_source_coordinate(y, glyph.box_h, dst_h);
+    let src_x1 = (src_x + 1).min(glyph.box_w.saturating_sub(1));
+    let src_y1 = (src_y + 1).min(glyph.box_h.saturating_sub(1));
+
+    let v00 = if glyph_bitmap_bit(font, glyph, src_x, src_y) {
+        255_u32
+    } else {
+        0
+    };
+    let v10 = if glyph_bitmap_bit(font, glyph, src_x1, src_y) {
+        255_u32
+    } else {
+        0
+    };
+    let v01 = if glyph_bitmap_bit(font, glyph, src_x, src_y1) {
+        255_u32
+    } else {
+        0
+    };
+    let v11 = if glyph_bitmap_bit(font, glyph, src_x1, src_y1) {
+        255_u32
+    } else {
+        0
+    };
+
+    let top = v00 * (256 - frac_x) + v10 * frac_x;
+    let bottom = v01 * (256 - frac_x) + v11 * frac_x;
+    let interpolated = (top * (256 - frac_y) + bottom * frac_y + 32_768) >> 16;
+
+    interpolated >= 128
+}
+
+#[cfg(feature = "scaling")]
 fn scaled_source_coordinate(dst: u32, src_len: u32, dst_len: u32) -> (u32, u32) {
     if src_len <= 1 || dst_len == 0 {
         return (0, 0);
@@ -765,9 +740,13 @@ mod tests {
     );
     const SIMPLE_PRESET: FontPreset<'static> = FontPreset::new(&SIMPLE_FONT);
 
+    #[cfg(feature = "scaling")]
     const UNIT_BITMAP: &[u8] = &[0b1000_0000];
+    #[cfg(feature = "scaling")]
     const UNIT_SYMBOLS: &str = "A";
+    #[cfg(feature = "scaling")]
     const UNIT_METRICS: &[GlyphMetrics] = &[GlyphMetrics::new(0, 1, 1, 1, 0, 0)];
+    #[cfg(feature = "scaling")]
     const UNIT_FONT: FontData<'static> = FontData::new(
         UNIT_BITMAP,
         UNIT_SYMBOLS,
@@ -775,6 +754,7 @@ mod tests {
         FontLayout::new(1, 1),
         FontVerticalMetrics::new(1, 1, 0),
     );
+    #[cfg(feature = "scaling")]
     const UNIT_PRESET: FontPreset<'static> = FontPreset::new(&UNIT_FONT);
 
     const BASELINE_FONT: FontData<'static> = FontData::new(
@@ -792,8 +772,9 @@ mod tests {
             EgTextStyle::new(&HELLO_PRESET, BinaryColor::On);
 
         assert_eq!(STYLE.preset.font.vertical_metrics.native_size, 20);
-        assert_eq!(STYLE.preset.font.layout.half_width, 8);
-        assert_eq!(STYLE.preset.font.layout.full_width, 16);
+        assert_eq!(STYLE.preset.ascii_width(), 8);
+        assert_eq!(STYLE.preset.non_ascii_width(), 16);
+        assert_eq!(STYLE.preset.height(), 16);
     }
 
     #[test]
@@ -812,71 +793,10 @@ mod tests {
     fn font_preset_uses_default_dimensions() {
         let style = HELLO_PRESET.default_text_style(BinaryColor::On);
 
-        assert_eq!(style.preset.font.layout.half_width, 8);
-        assert_eq!(style.preset.font.layout.full_width, 16);
+        assert_eq!(style.preset.ascii_width(), 8);
+        assert_eq!(style.preset.non_ascii_width(), 16);
+        assert_eq!(style.preset.height(), 16);
         assert_eq!(style.preset.font.symbols, HELLO_FONT.symbols);
-        assert_eq!(style.scale_ratio(), None);
-    }
-
-    #[test]
-    fn scaled_font_preset_scales_proportionally() {
-        let scaled = HELLO_PRESET.scaled_ratio(1, 2);
-        let style = scaled.default_text_style(BinaryColor::On);
-
-        assert_eq!(scaled.ascii_width(), 4);
-        assert_eq!(scaled.non_ascii_width(), 8);
-        assert_eq!(scaled.height(), 8);
-        assert_eq!(style.preset.ascii_width(), 4);
-        assert_eq!(style.preset.non_ascii_width(), 8);
-    }
-
-    #[test]
-    fn scaled_font_preset_identity_ratio_uses_original_dimensions() {
-        let scaled = HELLO_PRESET.scaled_ratio(1, 1);
-
-        assert_eq!(scaled.ascii_width(), 8);
-        assert_eq!(scaled.non_ascii_width(), 16);
-        assert_eq!(scaled.height(), 16);
-    }
-
-    #[test]
-    fn scaled_font_preset_supports_fractional_ratio() {
-        let scaled = HELLO_PRESET.scaled_ratio(3, 2);
-        let style = scaled.default_text_style(BinaryColor::On);
-
-        assert_eq!(scaled.ascii_width(), 12);
-        assert_eq!(scaled.non_ascii_width(), 24);
-        assert_eq!(scaled.height(), 24);
-        assert_eq!(style.preset.ascii_width(), 12);
-        assert_eq!(style.preset.non_ascii_width(), 24);
-        assert_eq!(style.scale_ratio(), Some((3, 2)));
-    }
-
-    #[test]
-    #[should_panic]
-    fn scaled_font_preset_zero_denominator_panics() {
-        let _ = HELLO_PRESET.scaled_ratio(3, 0);
-    }
-
-    #[test]
-    fn eg_text_style_uses_non_proportional_dimensions() {
-        let style = EgTextStyle::new(&HELLO_PRESET, BinaryColor::On);
-
-        assert_eq!(style.preset.font.layout.half_width, 8);
-        assert_eq!(style.preset.font.layout.full_width, 16);
-        assert_eq!(style.preset.font.symbols, HELLO_FONT.symbols);
-        assert_eq!(style.scale_ratio(), None);
-    }
-
-    #[test]
-    fn eg_text_style_from_scaled_preset_uses_ratio_dimensions() {
-        let scaled = HELLO_PRESET.scaled_ratio(3, 2);
-        let style = EgTextStyle::new(&scaled, BinaryColor::On);
-
-        assert_eq!(style.preset.ascii_width(), 12);
-        assert_eq!(style.preset.non_ascii_width(), 24);
-        assert_eq!(style.preset.font.symbols, HELLO_FONT.symbols);
-        assert_eq!(style.scale_ratio(), Some((3, 2)));
     }
 
     #[test]
@@ -992,10 +912,40 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "scaling")]
     #[test]
-    fn scaled_font_preset_interpolates_glyph_bitmap() {
-        let scaled = UNIT_PRESET.scaled_ratio(2, 1);
-        let style = scaled.default_text_style(BinaryColor::On);
+    fn style_scale_ratio_scales_layout_proportionally() {
+        let style = EgTextStyle::new(&HELLO_PRESET, BinaryColor::On).with_scale_ratio(1, 2);
+        let metrics = style.measure_string("1哈", Point::new(4, 5), Baseline::Top);
+
+        assert_eq!(style.scale_ratio(), (1, 2));
+        assert!(style.is_scaled());
+        assert_eq!(metrics.bounding_box.size, Size::new(12, 7));
+        assert_eq!(metrics.next_position, Point::new(16, 5));
+    }
+
+    #[cfg(feature = "scaling")]
+    #[test]
+    fn style_scale_ratio_supports_fractional_ratio() {
+        let style = EgTextStyle::new(&HELLO_PRESET, BinaryColor::On).with_scale_ratio(3, 2);
+        let metrics = style.measure_string("1哈", Point::new(4, 5), Baseline::Top);
+
+        assert_eq!(style.scale_ratio(), (3, 2));
+        assert_eq!(metrics.bounding_box.size, Size::new(36, 22));
+        assert_eq!(metrics.next_position, Point::new(40, 5));
+    }
+
+    #[cfg(feature = "scaling")]
+    #[test]
+    #[should_panic]
+    fn style_scale_ratio_zero_denominator_panics() {
+        let _ = EgTextStyle::new(&HELLO_PRESET, BinaryColor::On).with_scale_ratio(3, 0);
+    }
+
+    #[cfg(feature = "scaling")]
+    #[test]
+    fn style_scale_ratio_interpolates_glyph_bitmap() {
+        let style = EgTextStyle::new(&UNIT_PRESET, BinaryColor::On).with_scale_ratio(2, 1);
         let mut display = MockDisplay::new();
         display.set_allow_out_of_bounds_drawing(true);
 
