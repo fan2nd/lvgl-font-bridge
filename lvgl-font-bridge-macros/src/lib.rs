@@ -14,7 +14,6 @@ struct FontMacroInput {
     path: LitStr,
     half_width: LitInt,
     full_width: LitInt,
-    height: LitInt,
 }
 
 impl Parse for FontMacroInput {
@@ -22,7 +21,6 @@ impl Parse for FontMacroInput {
         let mut path = None;
         let mut half_width = None;
         let mut full_width = None;
-        let mut height = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -32,11 +30,10 @@ impl Parse for FontMacroInput {
                 "path" => path = Some(input.parse()?),
                 "half_width" => half_width = Some(input.parse()?),
                 "full_width" => full_width = Some(input.parse()?),
-                "height" => height = Some(input.parse()?),
                 _ => {
                     return Err(syn::Error::new(
                         key.span(),
-                        "expected one of: path, half_width, full_width, height",
+                        "expected one of: path, half_width, full_width",
                     ));
                 }
             }
@@ -52,7 +49,6 @@ impl Parse for FontMacroInput {
                 .ok_or_else(|| syn::Error::new(Span::call_site(), "missing `half_width`"))?,
             full_width: full_width
                 .ok_or_else(|| syn::Error::new(Span::call_site(), "missing `full_width`"))?,
-            height: height.ok_or_else(|| syn::Error::new(Span::call_site(), "missing `height`"))?,
         })
     }
 }
@@ -104,7 +100,6 @@ fn expand_font_macro(input: FontMacroInput) -> Result<TokenStream2> {
     let symbols = LitStr::new(&parsed.symbols, Span::call_site());
     let half_width = &input.half_width;
     let full_width = &input.full_width;
-    let height = &input.height;
     let native_size = parsed.native_size;
     let line_height = parsed.line_height;
     let baseline = parsed.baseline;
@@ -138,7 +133,7 @@ fn expand_font_macro(input: FontMacroInput) -> Result<TokenStream2> {
             BITMAP,
             SYMBOLS,
             METRICS,
-            #crate_path::FontLayout::new(#half_width, #full_width, #height),
+            #crate_path::FontLayout::new(#half_width, #full_width),
             #crate_path::FontVerticalMetrics::new(#native_size, #line_height, #baseline),
         )
     }})

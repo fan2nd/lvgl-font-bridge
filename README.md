@@ -18,7 +18,7 @@ It keeps the original 1bpp glyph bitmap data, but replaces LVGL's numeric charac
 - Horizontal advance is controlled by the user:
   - one width for ASCII characters
   - one width for non-ASCII characters
-- Vertical layout scales with `size`
+- Vertical layout uses the preset logical height derived from `full_width`
 - Scaled presets use interpolated bitmap rendering at runtime
 - `FontData::new` contains a const assertion that checks:
   - `symbols.chars().count() == metrics.len()`
@@ -42,7 +42,7 @@ const FONT: FontData<'static> = FontData::new(
     BITMAP,
     SYMBOLS,
     METRICS,
-    FontLayout::new(8, 16, 20),
+    FontLayout::new(8, 16),
     FontVerticalMetrics::new(20, 18, 1),
 );
 ```
@@ -53,7 +53,6 @@ Create an `EgTextStyle` with:
 
 - a `FontPreset`
 - a text color
-- an optional logical `size`
 
 ```rust
 use embedded_graphics::pixelcolor::BinaryColor;
@@ -70,19 +69,18 @@ use lvgl_font_bridge::{EgTextStyle, FontLayout, FontPreset, FontVerticalMetrics}
 #     BITMAP,
 #     SYMBOLS,
 #     METRICS,
-#     FontLayout::new(8, 16, 20),
+#     FontLayout::new(8, 16),
 #     FontVerticalMetrics::new(10, 10, 2),
 # );
 # const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
 let style = EgTextStyle::new(&PRESET, BinaryColor::On);
-let custom_size = EgTextStyle::with_size(&PRESET, BinaryColor::On, 24);
 ```
 
 Then use it with `embedded-graphics::text::Text`.
 
 ## Proportional Scaling Wrapper
 
-If you want half-width, full-width, and height to scale together based on the original preset, use `FontPreset::scaled_ratio(numerator, denominator)`.
+If you want half-width, full-width, and the default logical height derived from `full_width` to scale together based on the original preset, use `FontPreset::scaled_ratio(numerator, denominator)`.
 
 ```rust
 use embedded_graphics::pixelcolor::BinaryColor;
@@ -98,7 +96,7 @@ use lvgl_font_bridge::{FontData, FontLayout, FontPreset, FontVerticalMetrics, Gl
 #     BITMAP,
 #     SYMBOLS,
 #     METRICS,
-#     FontLayout::new(8, 16, 20),
+#     FontLayout::new(8, 16),
 #     FontVerticalMetrics::new(10, 10, 2),
 # );
 const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
@@ -111,11 +109,11 @@ This keeps the original proportions:
 
 - `half_width`
 - `full_width`
-- `height`
+- default logical `height` derived from `full_width`
 
 When a style is created from `scaled_ratio(...)`, glyph rendering also uses interpolated bitmap scaling instead of only changing layout metrics.
 
-`EgTextStyle` can be constructed directly from the merged preset type:
+`EgTextStyle` is constructed directly from the preset:
 
 ```rust
 # use embedded_graphics::pixelcolor::BinaryColor;
@@ -130,11 +128,11 @@ When a style is created from `scaled_ratio(...)`, glyph rendering also uses inte
 #     BITMAP,
 #     SYMBOLS,
 #     METRICS,
-#     FontLayout::new(8, 16, 20),
+#     FontLayout::new(8, 16),
 #     FontVerticalMetrics::new(10, 10, 2),
 # );
 # const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
-let fixed = EgTextStyle::with_size(&PRESET, BinaryColor::On, 20);
+let fixed = EgTextStyle::new(&PRESET, BinaryColor::On);
 let scaled = PRESET.scaled_ratio(3, 2);
 let proportional = EgTextStyle::new(&scaled, BinaryColor::On);
 
@@ -156,7 +154,7 @@ For non-integer ratios:
 #     BITMAP,
 #     SYMBOLS,
 #     METRICS,
-#     FontLayout::new(8, 16, 20),
+#     FontLayout::new(8, 16),
 #     FontVerticalMetrics::new(10, 10, 2),
 # );
 const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
@@ -177,9 +175,8 @@ const FONT: FontData<'static> = lvgl_font!(
     path = "hello.c",
     half_width = 6,
     full_width = 12,
-    height = 12,
 );
-const PRESET: FontPreset<'static> = FontPreset::new(&FONT).with_scaled_height(16);
+const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
 ```
 
 The macro returns `FontData`, which contains:
@@ -187,13 +184,11 @@ The macro returns `FontData`, which contains:
 - parsed `FontData`
 - `half_width`
 - `full_width`
-- `height`
 - native vertical metrics
 
 Convert it to `FontPreset` with `const` functions:
 
 - `FontPreset::new(&font)`
-- `.with_scaled_height(height)`
 - `.scaled_ratio(numerator, denominator)`
 
 Create a text style from the preset:
@@ -206,11 +201,9 @@ use embedded_graphics::pixelcolor::BinaryColor;
 #     path = "hello.c",
 #     half_width = 6,
 #     full_width = 12,
-#     height = 12,
 # );
-# const PRESET: FontPreset<'static> = FontPreset::new(&FONT).with_scaled_height(16);
+# const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
 let style = PRESET.default_text_style(BinaryColor::On);
-let bigger = PRESET.text_style(BinaryColor::On, 18);
 ```
 
 ## Behavior Notes
@@ -221,10 +214,8 @@ let bigger = PRESET.text_style(BinaryColor::On, 18);
   - ASCII characters use `ascii_width`
   - all other characters use `non_ascii_width`
 - `adv_w` is preserved from LVGL data, but current horizontal layout uses the user-specified widths instead
-- `EgTextStyle::new(...)` uses the preset height as its default logical size
-- `EgTextStyle::with_size(...)` and `EgTextStyle::with_background_and_size(...)` require `size != 0`
-- `FontPreset::scaled_ratio(...)` and `FontPreset::with_scaled_height(...)` require non-zero scale inputs
-- `with_scaled_height(...)` only changes bitmap interpolation ratio; it does not auto-resize `half_width`, `full_width`, or `height`
+- `EgTextStyle::new(...)` uses `full_width` as its default logical height through the preset
+- `FontPreset::scaled_ratio(...)` requires non-zero scale inputs
 
 ## Limitations
 
