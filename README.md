@@ -18,7 +18,7 @@ It keeps the original 1bpp glyph bitmap data, but replaces LVGL's numeric charac
 - Horizontal advance is controlled by the user:
   - one width for ASCII characters
   - one width for non-ASCII characters
-- Vertical layout uses the preset logical height derived from `full_width`
+- Vertical layout uses the logical height derived from `full_width`
 - `FontData::new` contains a const assertion that checks:
   - `symbols.chars().count() == metrics.len()`
 
@@ -54,11 +54,11 @@ const FONT: FontData<'static> = FontData::new(
 
 ## Default Mode
 
-In the default build, `FontPreset` only carries base font information and layout defaults. `EgTextStyle` renders without proportional bitmap scaling.
+In the default build, `EgTextStyle` renders directly from `FontData` without proportional bitmap scaling.
 
 ```rust
 use embedded_graphics::pixelcolor::BinaryColor;
-use lvgl_font_bridge::{EgTextStyle, FontLayout, FontPreset, FontVerticalMetrics};
+use lvgl_font_bridge::{EgTextStyle, FontLayout, FontVerticalMetrics};
 
 # use lvgl_font_bridge::{FontData, GlyphMetrics};
 # const BITMAP: &[u8] = &[0x00];
@@ -74,8 +74,7 @@ use lvgl_font_bridge::{EgTextStyle, FontLayout, FontPreset, FontVerticalMetrics}
 #     FontLayout::new(8, 16),
 #     FontVerticalMetrics::new(10, 10, 2),
 # );
-# const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
-let style = EgTextStyle::new(&PRESET, BinaryColor::On);
+let style = EgTextStyle::new(&FONT, BinaryColor::On);
 ```
 
 Then use it with `embedded-graphics::text::Text`.
@@ -90,14 +89,14 @@ lvgl-font-bridge = { version = "...", features = ["scaling"] }
 
 With `scaling` enabled, the boundary is:
 
-- `FontPreset`
-  - still only stores base font data
+- `FontData`
+  - stores only base font data
 - `EgTextStyle`
   - optionally applies a scale ratio for this render style
 
 ```rust
 use embedded_graphics::pixelcolor::BinaryColor;
-use lvgl_font_bridge::{EgTextStyle, FontData, FontLayout, FontPreset, FontVerticalMetrics, GlyphMetrics};
+use lvgl_font_bridge::{EgTextStyle, FontData, FontLayout, FontVerticalMetrics, GlyphMetrics};
 
 # const BITMAP: &[u8] = &[0x00];
 # const SYMBOLS: &str = "A哈";
@@ -112,10 +111,8 @@ use lvgl_font_bridge::{EgTextStyle, FontData, FontLayout, FontPreset, FontVertic
 #     FontLayout::new(8, 16),
 #     FontVerticalMetrics::new(10, 10, 2),
 # );
-const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
-
-let fixed = EgTextStyle::new(&PRESET, BinaryColor::On);
-let scaled = EgTextStyle::new(&PRESET, BinaryColor::On).with_scale_ratio(3, 2);
+let fixed = EgTextStyle::new(&FONT, BinaryColor::On);
+let scaled = EgTextStyle::new(&FONT, BinaryColor::On).with_scale_ratio(3, 2);
 ```
 
 This scales:
@@ -129,7 +126,7 @@ For non-integer ratios:
 
 ```rust
 # use embedded_graphics::pixelcolor::BinaryColor;
-# use lvgl_font_bridge::{EgTextStyle, FontData, FontLayout, FontPreset, FontVerticalMetrics, GlyphMetrics};
+# use lvgl_font_bridge::{EgTextStyle, FontData, FontLayout, FontVerticalMetrics, GlyphMetrics};
 # const BITMAP: &[u8] = &[0x00];
 # const SYMBOLS: &str = "A哈";
 # const METRICS: &[GlyphMetrics] = &[
@@ -143,8 +140,7 @@ For non-integer ratios:
 #     FontLayout::new(8, 16),
 #     FontVerticalMetrics::new(10, 10, 2),
 # );
-# const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
-let scaled = EgTextStyle::new(&PRESET, BinaryColor::On).with_scale_ratio(3, 2);
+let scaled = EgTextStyle::new(&FONT, BinaryColor::On).with_scale_ratio(3, 2);
 ```
 
 This scales by `1.5x`.
@@ -154,14 +150,13 @@ This scales by `1.5x`.
 Use `lvgl_font!` to read an LVGL-generated `.c` file at compile time and expand it into Rust `FontData`.
 
 ```rust
-use lvgl_font_bridge::{FontData, FontPreset, lvgl_font};
+use lvgl_font_bridge::{FontData, lvgl_font};
 
 const FONT: FontData<'static> = lvgl_font!(
     path = "hello.c",
     half_width = 6,
     full_width = 12,
 );
-const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
 ```
 
 The macro returns `FontData`, which contains:
@@ -171,19 +166,18 @@ The macro returns `FontData`, which contains:
 - `full_width`
 - native vertical metrics
 
-Create a text style from the preset:
+Create a text style directly from the font:
 
 ```rust
 use embedded_graphics::pixelcolor::BinaryColor;
 
-# use lvgl_font_bridge::{FontData, FontPreset, lvgl_font};
+# use lvgl_font_bridge::{FontData, lvgl_font};
 # const FONT: FontData<'static> = lvgl_font!(
 #     path = "hello.c",
 #     half_width = 6,
 #     full_width = 12,
 # );
-# const PRESET: FontPreset<'static> = FontPreset::new(&FONT);
-let style = PRESET.default_text_style(BinaryColor::On);
+let style = EgTextStyle::new(&FONT, BinaryColor::On);
 ```
 
 ## Behavior Notes
@@ -194,7 +188,7 @@ let style = PRESET.default_text_style(BinaryColor::On);
   - ASCII characters use `half_width`
   - all other characters use `full_width`
 - `adv_w` is preserved from LVGL data, but current horizontal layout uses the user-specified widths instead
-- `EgTextStyle::new(...)` uses `full_width` as its default logical height through the preset
+- `EgTextStyle::new(...)` uses `full_width` as its default logical height
 - `with_scale_ratio(...)` is only available with the `scaling` feature
 
 ## Limitations
